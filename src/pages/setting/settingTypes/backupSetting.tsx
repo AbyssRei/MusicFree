@@ -14,10 +14,14 @@ import Config, { useAppConfig } from "@/core/appConfig";
 import { useI18N } from "@/core/i18n";
 import delay from "@/utils/delay";
 import { writeInChunks } from "@/utils/fileUtils.ts";
-import { errorLog } from "@/utils/log.ts";
+import { errorLog, devLog } from "@/utils/log.ts";
 import { getDocumentAsync } from "expo-document-picker";
-import { readAsStringAsync } from "expo-file-system";
+import { readAsStringAsync } from "expo-file-system/legacy";
 import { AuthType, createClient } from "webdav";
+
+const MUSICFREE_WEBDAV_BACKUP_DIR = "/MusicFree";
+const MUSICFREE_WEBDAV_BACKUP_FILE = `${MUSICFREE_WEBDAV_BACKUP_DIR}/MusicFreeBackup.json`;
+const BAKAMUSIC_WEBDAV_BACKUP_FILE = "/BakaMusic/BakaMusicBackup.json";
 
 export default function BackupSetting() {
     const { t } = useI18N();
@@ -43,7 +47,7 @@ export default function BackupSetting() {
                         loadingText: t("backupAndResume.backuping"),
                         promise: writeInChunks(
                             `${folder}${folder?.endsWith("/") ? "" : "/"
-                            }backup.json`,
+                            }${Backup.createBackupFileName()}`,
                             raw,
                         ),
                         onResolve(_, hideDialog) {
@@ -58,7 +62,7 @@ export default function BackupSetting() {
                         onReject(reason, hideDialog) {
                             hideDialog();
                             resolve(false);
-                            console.log(reason);
+                            devLog("warn", "💾[备份设置] 备份被拒绝", reason);
                             Toast.warn(t("toast.backupFail", { reason: reason?.message ?? reason }));
                         },
                     });
@@ -97,7 +101,7 @@ export default function BackupSetting() {
                     onReject(reason, hideDialog) {
                         hideDialog();
                         resolve(false);
-                        console.log(reason);
+                        devLog("warn", "💾[备份设置] 恢复被拒绝", reason);
                         Toast.warn(t("toast.resumeFail", { reason: reason?.message ?? reason }));
                     },
                 });
@@ -146,18 +150,26 @@ export default function BackupSetting() {
             password: password,
         });
 
-        if (!(await client.exists("/MusicFree/MusicFreeBackup.json"))) {
+        const restoreSource = await client.exists(MUSICFREE_WEBDAV_BACKUP_FILE)
+            ? MUSICFREE_WEBDAV_BACKUP_FILE
+            : await client.exists(BAKAMUSIC_WEBDAV_BACKUP_FILE)
+                ? BAKAMUSIC_WEBDAV_BACKUP_FILE
+                : null;
+        if (!restoreSource) {
             Toast.warn(t("toast.backupFileNotFound"));
             return;
         }
 
         try {
             const resumeData = await client.getFileContents(
-                "/MusicFree/MusicFreeBackup.json",
+                restoreSource,
                 {
                     format: "text",
                 },
             );
+            if (typeof resumeData !== "string") {
+                throw new Error("WebDAV backup response is not valid text");
+            }
             await Backup.resume(
                 resumeData,
                 Config.getConfig("backup.resumeMode"),
@@ -184,12 +196,12 @@ export default function BackupSetting() {
             });
 
             const raw = Backup.backup();
-            if (!(await client.exists("/MusicFree"))) {
-                await client.createDirectory("/MusicFree");
+            if (!(await client.exists(MUSICFREE_WEBDAV_BACKUP_DIR))) {
+                await client.createDirectory(MUSICFREE_WEBDAV_BACKUP_DIR);
             }
             // 临时文件
             await client.putFileContents(
-                "/MusicFree/MusicFreeBackup.json",
+                MUSICFREE_WEBDAV_BACKUP_FILE,
                 raw,
                 {
                     overwrite: true,
