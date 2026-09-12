@@ -20,7 +20,7 @@ export default function useSearchLrc() {
         pluginHash?: string,
     ) {
         /** 如果没有指定插件，就用所有插件搜索 */
-        console.log("SEARCH LRC", query, queryPage);
+        devLog("info", "🔍[搜索歌词] 开始搜索", { query, queryPage });
         let plugins: Plugin[] = [];
         if (pluginHash) {
             const tgtPlugin = PluginManager.getByHash(pluginHash);
@@ -110,7 +110,7 @@ export default function useSearchLrc() {
                     produce(draft => {
                         const prevMediaResult = draft.data;
 
-                        const prevPluginResult: any = prevMediaResult[
+                        const currPluginResult: any = prevMediaResult[
                             _hash
                         ] ?? {
                             data: [],
@@ -126,7 +126,7 @@ export default function useSearchLrc() {
                             page,
                             data: newSearch
                                 ? currResult
-                                : (prevPluginResult.data ?? []).concat(
+                                : (currPluginResult.data ?? []).concat(
                                     currResult,
                                 ),
                         };
@@ -149,11 +149,11 @@ export default function useSearchLrc() {
                 searchResultStore.setValue(
                     produce(draft => {
                         const prevMediaResult = draft.data;
-                        const prevPluginResult = prevMediaResult[_hash] ?? {
+                        const currentPluginResult = prevMediaResult[_hash] ?? {
                             data: [],
                         };
 
-                        prevPluginResult.state = RequestStateCode.FINISHED;
+                        currentPluginResult.state = RequestStateCode.FINISHED;
                         return draft;
                     }),
                 );

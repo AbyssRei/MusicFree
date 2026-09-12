@@ -1,83 +1,1858 @@
-import React, { memo } from "react";
-import { StyleSheet, Text } from "react-native";
+import React, { memo, useEffect, useMemo, useState } from "react";
+import {
+    Platform,
+    StyleProp,
+    StyleSheet,
+    Text,
+    View,
+    ViewStyle,
+} from "react-native";
+import Animated, {
+    useSharedValue,
+    useAnimatedStyle,
+    withTiming,
+    useDerivedValue,
+    interpolateColor,
+    Easing,
+    type SharedValue,
+} from "react-native-reanimated";
 import rpx from "@/utils/rpx";
 import useColors from "@/hooks/useColors";
 import { fontSizeConst } from "@/constants/uiConst";
+import { getCurrentPositionMsShared } from "@/core/lyricManager";
+import { useAppConfig } from "@/core/appConfig";
 
-interface ILyricItemComponentProps {
-    // 行号
-    index?: number;
-    // 显示
-    light?: boolean;
-    // 高亮
-    highlight?: boolean;
-    // 文本
-    text?: string;
-    // 字体大小
-    fontSize?: number;
+type LyricAlign = "left" | "center" | "right";
 
-    onLayout?: (index: number, height: number) => void;
+type LyricFlexAlignment = "flex-start" | "center" | "flex-end";
+
+function getLyricFlexAlignment(align?: LyricAlign): LyricFlexAlignment {
+    if (align === "left") {
+        return "flex-start";
+    }
+    if (align === "right") {
+        return "flex-end";
+    }
+    return "center";
 }
 
-function _LyricItemComponent(props: ILyricItemComponentProps) {
-    const { light, highlight, text, onLayout, index, fontSize } = props;
+function getLyricTransformOriginStyle(align?: LyricAlign) {
+    if (align === "left") {
+        return { transformOrigin: "left center" as const };
+    }
+    if (align === "right") {
+        return { transformOrigin: "right center" as const };
+    }
+    return {};
+}
 
-    const colors = useColors();
+// AMll interlude indicator. This is not a generic looping loader: every frame
+// is derived from the real interlude interval, including the staged reveal,
+// subtle breath and the collapse before the next lyric arrives.
+const AMLL_INTERLUDE_MIN_DURATION_MS = 4000;
+const AMLL_INTERLUDE_TARGET_BREATHE_MS = 1500;
+
+function clamp(min: number, current: number, max: number) {
+    "worklet";
+    return Math.max(min, Math.min(current, max));
+}
+
+function easeInOutBack(x: number) {
+    "worklet";
+    const c1 = 1.70158;
+    const c2 = c1 * 1.525;
+    return x < 0.5
+        ? ((2 * x) ** 2 * ((c2 + 1) * 2 * x - c2)) / 2
+        : ((2 * x - 2) ** 2 * ((c2 + 1) * (x * 2 - 2) + c2) + 2) / 2;
+}
+
+function easeOutExpo(x: number) {
+    "worklet";
+    return x === 1 ? 1 : 1 - 2 ** (-10 * x);
+}
+
+function getAmllDotOpacity(
+    elapsed: number,
+    duration: number,
+    delay: number,
+    globalOpacity: number,
+) {
+    "worklet";
+    const dotsDuration = Math.max(1, duration - 750);
+    return clamp(
+        0,
+        globalOpacity * clamp(
+            0.25,
+            (((elapsed - delay) * 3) / dotsDuration) * 0.75,
+            1,
+        ),
+        1,
+    );
+}
+
+export const BreathingDots = memo(({
+    color,
+    align = "center",
+    fontSize = fontSizeConst.content,
+    startTimeMs,
+    endTimeMs,
+}: {
+    color: string;
+    align?: LyricAlign;
+    fontSize?: number;
+    startTimeMs?: number;
+    endTimeMs?: number;
+}) => {
+    const currentPositionMsShared = useCurrentPositionShared();
+    const duration = Math.max(0, (endTimeMs ?? 0) - (startTimeMs ?? 0));
+    const enabled =
+        startTimeMs !== undefined &&
+        endTimeMs !== undefined &&
+        duration >= AMLL_INTERLUDE_MIN_DURATION_MS;
+
+    // AMll uses 0.5em dots, 0.25em gaps and 0.75em horizontal padding.
+    const dotSize = fontSize * 0.5;
+    const gap = fontSize * 0.25;
+    const horizontalPadding = fontSize * 0.75;
+    const rowWidth = dotSize * 3 + gap * 2 + horizontalPadding * 2;
+
+    // Keep the UI-runtime value scalar. Returning a fresh object and creating
+    // a nested worklet callback on every frame can trigger Hermes/worklets
+    // native crashes on some Android 16 devices.
+    const elapsed = useDerivedValue(() => {
+        "worklet";
+        if (!enabled || startTimeMs === undefined || endTimeMs === undefined) {
+            return -1;
+        }
+
+        const value = currentPositionMsShared.value - startTimeMs;
+        return value < 0 || value > duration ? -1 : value;
+    }, [duration, enabled, endTimeMs, startTimeMs]);
+
+    const motion = useDerivedValue(() => {
+        "worklet";
+        const currentDuration = elapsed.value;
+        if (currentDuration < 0) {
+            return 0;
+        }
+
+        const breatheDuration =
+            duration / Math.ceil(duration / AMLL_INTERLUDE_TARGET_BREATHE_MS);
+        let scale =
+            Math.sin(1.5 * Math.PI - (currentDuration / breatheDuration) * 2) /
+                20 +
+            1;
+        if (currentDuration < 2000) {
+            scale *= easeOutExpo(currentDuration / 2000);
+        }
+
+        const remaining = duration - currentDuration;
+        if (remaining < 750) {
+            scale *= 1 - easeInOutBack((750 - remaining) / 750 / 2);
+        }
+
+        return Math.max(0, scale) * 0.7;
+    }, [duration, elapsed]);
+
+    const globalOpacity = useDerivedValue(() => {
+        "worklet";
+        const currentDuration = elapsed.value;
+        if (currentDuration < 0) {
+            return 0;
+        }
+        let opacity = 1;
+        if (currentDuration < 500) {
+            opacity = 0;
+        } else if (currentDuration < 1000) {
+            opacity = (currentDuration - 500) / 500;
+        }
+        const remaining = duration - currentDuration;
+        if (remaining < 375) {
+            opacity *= clamp(0, remaining / 375, 1);
+        }
+        return opacity;
+    }, [duration, elapsed]);
+
+    const containerStyle = useAnimatedStyle(() => {
+        const scale = motion.value;
+        const translateX = align === "left"
+            ? (rowWidth * (scale - 1)) / 2
+            : align === "right"
+                ? (rowWidth * (1 - scale)) / 2
+                : 0;
+        return {
+            transform: [{ scale }, { translateX }],
+        };
+    }, [align, rowWidth]);
+
+    const dot0Style = useAnimatedStyle(() => ({
+        opacity: getAmllDotOpacity(elapsed.value, duration, 0, globalOpacity.value),
+    }), [duration]);
+    const dot1Style = useAnimatedStyle(() => ({
+        opacity: getAmllDotOpacity(
+            elapsed.value,
+            duration,
+            Math.max(1, duration - 750) / 3,
+            globalOpacity.value,
+        ),
+    }), [duration]);
+    const dot2Style = useAnimatedStyle(() => ({
+        opacity: getAmllDotOpacity(
+            elapsed.value,
+            duration,
+            (Math.max(1, duration - 750) / 3) * 2,
+            globalOpacity.value,
+        ),
+    }), [duration]);
+
+    const dotBaseStyle = {
+        width: dotSize,
+        height: dotSize,
+        borderRadius: dotSize / 2,
+        backgroundColor: color,
+    };
 
     return (
+        <View style={[
+            dotsStyles.container,
+            { alignItems: getLyricFlexAlignment(align) },
+        ]}>
+            <Animated.View
+                style={[
+                    dotsStyles.dotsRow,
+                    {
+                        columnGap: gap,
+                        paddingHorizontal: horizontalPadding,
+                        paddingVertical: fontSize * 0.2,
+                    },
+                    containerStyle,
+                ]}>
+                <Animated.View style={[dotBaseStyle, dot0Style]} />
+                <Animated.View style={[dotBaseStyle, dot1Style]} />
+                <Animated.View style={[dotBaseStyle, dot2Style]} />
+            </Animated.View>
+        </View>
+    );
+});
+
+interface ILyricItemComponentProps {
+    index?: number;
+    light?: boolean;
+    highlight?: boolean;
+    text?: string;
+    fontSize?: number;
+    words?: ILyric.IWordData[];
+    romanizationWords?: ILyric.IWordData[];
+    hasWordByWord?: boolean;
+    romanization?: string;
+    hasRomanizationWordByWord?: boolean;
+    isRomanizationPseudo?: boolean;
+    translation?: string;
+    translationWords?: ILyric.IWordData[];
+    hasTranslationWordByWord?: boolean;
+    lyricOrder?: ("original" | "translation" | "romanization")[];
+    onLayout?: (index: number, height: number) => void;
+    align?: LyricAlign;
+    /** Actual empty-line/interlude interval, in milliseconds. */
+    interludeStartTimeMs?: number;
+    interludeEndTimeMs?: number;
+    /**
+     * Extra style on the outermost row container.
+     * Mini lyrics use this to drop large detail-page padding while keeping
+     * the same word-by-word / line animation implementation.
+     */
+    containerStyle?: StyleProp<ViewStyle>;
+    /** Word-by-word float amplitude in em (default 0.1). Mini lyrics use 0.05. */
+    wordFloatEm?: number;
+}
+
+// Animation timing configs
+const SCALE_TIMING_CONFIG = {
+    duration: 350,
+    easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+};
+
+// Scale factor for highlighted line (1 = no scale)
+const HIGHLIGHT_SCALE = 1;
+
+// Font size ratio for secondary lines (smaller than primary/first line)
+const SECONDARY_FONT_RATIO = 0.75;
+const TRANSLATION_HIGHLIGHT_OPACITY = 0.72;
+
+// AMll motion constants, ported from amll-core/lyric-player/dom/lyric-line.ts.
+const AMLL_MIN_DURATION_MS = 1000;
+// Default float height in em (full lyric page). Mini lyrics can override via wordFloatEm.
+const AMLL_WORD_FLOAT_EM = 0.1;
+const AMLL_EMPHASIS_STAGGER_RATIO = 2.5;
+const AMLL_EMPHASIS_FLOAT_DURATION_RATIO = 1.4;
+const AMLL_EMPHASIS_FLOAT_LEAD_MS = 400;
+
+type AmllEmphasisTiming = {
+    startTime: number;
+    duration: number;
+    amount: number;
+    blur: number;
+    offsetFactor: number;
+};
+
+function isCjkCodePoint(codePoint: number) {
+    return (
+        (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
+        (codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
+        (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+        (codePoint >= 0x3040 && codePoint <= 0x30ff) ||
+        (codePoint >= 0xac00 && codePoint <= 0xd7af)
+    );
+}
+
+function isFloatSeparator(codePoint: number) {
+    return (
+        codePoint <= 0x002f ||
+        (codePoint >= 0x003a && codePoint <= 0x0040) ||
+        (codePoint >= 0x005b && codePoint <= 0x0060) ||
+        (codePoint >= 0x007b && codePoint <= 0x007e) ||
+        (codePoint >= 0x2000 && codePoint <= 0x206f) ||
+        (codePoint >= 0x3000 && codePoint <= 0x303f) ||
+        (codePoint >= 0xff00 && codePoint <= 0xff65)
+    );
+}
+
+function isCjkText(text: string) {
+    const chars = [...text];
+    return chars.length > 0 && chars.every(char => isCjkCodePoint(char.codePointAt(0) ?? 0));
+}
+
+function shouldAmllEmphasize(text: string, duration: number) {
+    if (isCjkText(text)) return duration >= AMLL_MIN_DURATION_MS;
+    const length = [...text.trim()].length;
+    return duration >= AMLL_MIN_DURATION_MS && length > 1 && length <= 7;
+}
+
+type TimedCharacter = {
+    char: string;
+    wordIndex: number;
+    charIndex: number;
+    startTime: number;
+    endTime: number;
+};
+
+function buildAmllEmphasisTimings(words: ILyric.IWordData[]): Array<Array<AmllEmphasisTiming | undefined>> {
+    const result = words.map(word => new Array<AmllEmphasisTiming | undefined>(
+        Math.max(1, [...word.text].length),
+    ));
+    const characters: TimedCharacter[] = [];
+
+    words.forEach((word, wordIndex) => {
+        const chars = [...word.text];
+        const charDuration = chars.length > 0 ? Math.max(0, word.duration) / chars.length : 0;
+        chars.forEach((char, charIndex) => {
+            characters.push({
+                char,
+                wordIndex,
+                charIndex,
+                startTime: word.startTime + charDuration * charIndex,
+                endTime: word.startTime + charDuration * (charIndex + 1),
+            });
+        });
+        if (word.space && !word.text.endsWith(" ")) {
+            characters.push({
+                char: " ",
+                wordIndex: -1,
+                charIndex: -1,
+                startTime: word.startTime + Math.max(0, word.duration),
+                endTime: word.startTime + Math.max(0, word.duration),
+            });
+        }
+    });
+
+    const fullText = characters.map(character => character.char).join("");
+    type SegmenterLike = {
+        segment: (text: string) => Iterable<{ segment: string }>;
+    };
+    type SegmenterConstructor = new (
+        locale?: string,
+        options?: { granularity: "word" },
+    ) => SegmenterLike;
+    const Segmenter = (Intl as unknown as { Segmenter?: SegmenterConstructor }).Segmenter;
+    const segments = Segmenter
+        ? Array.from(new Segmenter(undefined, { granularity: "word" }).segment(fullText), item => item.segment)
+        : words.map(word => `${word.text}${word.space ? " " : ""}`);
+    let characterOffset = 0;
+    const lastWordIndex = words.length - 1;
+
+    for (const segment of segments) {
+        const segmentLength = [...segment].length;
+        const segmentCharacters = characters.slice(characterOffset, characterOffset + segmentLength);
+        characterOffset += segmentLength;
+        const visibleCharacters = segmentCharacters.filter(character =>
+            character.wordIndex >= 0 && !isFloatSeparator(character.char.codePointAt(0) ?? 0),
+        );
+        if (visibleCharacters.length === 0) continue;
+
+        const segmentText = visibleCharacters.map(character => character.char).join("");
+        const startTime = Math.min(...visibleCharacters.map(character => character.startTime));
+        const endTime = Math.max(...visibleCharacters.map(character => character.endTime));
+        const rawDuration = Math.max(0, endTime - startTime);
+        const sourceWordIndices = [...new Set(visibleCharacters.map(character => character.wordIndex))];
+        const sourceEmphasizes = sourceWordIndices.some(wordIndex => {
+            const sourceWord = words[wordIndex];
+            const sourceDuration = Math.max(0, sourceWord.duration);
+            if (isCjkText(sourceWord.text)) {
+                const sourceCharCount = Math.max(1, [...sourceWord.text].length);
+                return sourceDuration / sourceCharCount >= AMLL_MIN_DURATION_MS;
+            }
+            return shouldAmllEmphasize(sourceWord.text, sourceDuration);
+        });
+        const shouldEmphasize = sourceEmphasizes ||
+            (!isCjkText(segmentText) && shouldAmllEmphasize(segmentText, rawDuration));
+        if (!shouldEmphasize) continue;
+
+        let duration = Math.max(AMLL_MIN_DURATION_MS, rawDuration);
+        let amount = duration / 2000;
+        amount = amount > 1 ? Math.sqrt(amount) : amount ** 3;
+        let blur = duration / 3000;
+        blur = blur > 1 ? Math.sqrt(blur) : blur ** 3;
+        amount *= 0.6;
+        blur *= 0.5;
+
+        if (sourceWordIndices.includes(lastWordIndex)) {
+            amount *= 1.6;
+            blur *= 1.5;
+            duration *= 1.2;
+        }
+        amount = Math.min(1.2, amount);
+        blur = Math.min(0.8, blur);
+
+        visibleCharacters.forEach((character, index) => {
+            result[character.wordIndex][character.charIndex] = {
+                startTime: startTime +
+                    (duration / AMLL_EMPHASIS_STAGGER_RATIO / visibleCharacters.length) * index,
+                duration,
+                amount,
+                blur,
+                offsetFactor: visibleCharacters.length / 2 - index,
+            };
+        });
+    }
+
+    return result;
+}
+
+function cubicBezier(value: number, x1: number, y1: number, x2: number, y2: number) {
+    "worklet";
+    const progress = Math.max(0, Math.min(1, value));
+    if (progress === 0 || progress === 1) return progress;
+
+    let parameter = progress;
+    for (let iteration = 0; iteration < 5; iteration += 1) {
+        const inverse = 1 - parameter;
+        const currentX = 3 * inverse * inverse * parameter * x1 +
+            3 * inverse * parameter * parameter * x2 + parameter ** 3;
+        const derivative = 3 * inverse * inverse * x1 +
+            6 * inverse * parameter * (x2 - x1) +
+            3 * parameter * parameter * (1 - x2);
+        if (Math.abs(derivative) < 0.0001) break;
+        parameter = Math.max(0, Math.min(1, parameter - (currentX - progress) / derivative));
+    }
+
+    const inverse = 1 - parameter;
+    return 3 * inverse * inverse * parameter * y1 +
+        3 * inverse * parameter * parameter * y2 + parameter ** 3;
+}
+
+function amllEmphasisEasing(value: number) {
+    "worklet";
+    return value < 0.5
+        ? cubicBezier(value * 2, 0.2, 0.4, 0.58, 1)
+        : 1 - cubicBezier((value - 0.5) * 2, 0.3, 0, 0.58, 1);
+}
+
+// Normalize word space flags to prevent double spaces.
+// Handles two redundancy patterns in lyric data:
+// 1. word.text ends with ' ' AND word.space=true → clear space flag
+// 2. word.space=true AND next word.text starts with ' ' → clear space flag
+function normalizeWordSpaces(words: ILyric.IWordData[]): ILyric.IWordData[] {
+    return words.map((word, i) => {
+        if (!word.space) return word;
+        const nextWord = words[i + 1];
+        if (word.text.endsWith(" ") || (nextWord && nextWord.text.startsWith(" "))) {
+            return { ...word, space: false };
+        }
+        return word;
+    });
+}
+
+// Split a multi-character word into per-character sub-words with evenly distributed timing.
+// Chinese/Japanese single chars pass through unchanged. English words like "Hello" (500ms)
+// become H(100ms) e(100ms) l(100ms) l(100ms) o(100ms) — each letter animates independently.
+function splitWordToChars(word: ILyric.IWordData): ILyric.IWordData[] {
+    const { text, startTime, duration, space } = word;
+    // Single char or empty: no split needed
+    if (text.length <= 1) return [word];
+
+    const chars = [...text]; // handle unicode properly
+    const charCount = chars.length;
+    const durationPerChar = duration / charCount;
+
+    return chars.map((char, i) => ({
+        text: char,
+        startTime: startTime + i * durationPerChar,
+        duration: durationPerChar,
+        // Only the last char inherits the trailing space
+        space: i === charCount - 1 ? space : false,
+    }));
+}
+
+// Line-level active state tracking hook.
+// Computes activeCharIndex + activeCharProgress from a flat timing array using ONE useDerivedValue.
+// Each KaraokeWord compares its flat index to activeCharIndex — only the active char reads activeCharProgress.
+// Reanimated's dependency tracking ensures completed/pending chars' worklets DON'T re-evaluate per frame.
+// Result: ~400 worklet evals/frame → ~5 worklet evals/frame (80x improvement).
+function useCurrentPositionShared() {
+    return useMemo(() => getCurrentPositionMsShared(), []);
+}
+
+function useLineActiveState(flatTimings: { startTime: number; endTime: number }[]) {
+    const currentPositionMsShared = useCurrentPositionShared();
+    const activeCharIndex = useSharedValue(-1);
+    const activeCharProgress = useSharedValue(0);
+
+    useDerivedValue(() => {
+        "worklet";
+        const t = currentPositionMsShared.value;
+        const len = flatTimings.length;
+
+        // Fast path: before first char
+        if (len === 0 || t <= flatTimings[0].startTime) {
+            activeCharIndex.value = -1;
+            activeCharProgress.value = 0;
+            return;
+        }
+
+        // Fast path: after last char
+        const last = flatTimings[len - 1];
+        if (t >= last.endTime) {
+            activeCharIndex.value = len;
+            activeCharProgress.value = 1;
+            return;
+        }
+
+        // Binary search for active char
+        let lo = 0, hi = len - 1;
+        while (lo <= hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (t < flatTimings[mid].startTime) {
+                hi = mid - 1;
+            } else if (t >= flatTimings[mid].endTime) {
+                lo = mid + 1;
+            } else {
+                // Found active char
+                const timing = flatTimings[mid];
+                const dur = timing.endTime - timing.startTime;
+                activeCharIndex.value = mid;
+                activeCharProgress.value = dur > 0
+                    ? Math.min(1, Math.max(0, (t - timing.startTime) / dur))
+                    : 1;
+                return;
+            }
+        }
+
+        // Between chars (gap) — snap to the completed side
+        activeCharIndex.value = lo;
+        activeCharProgress.value = 0;
+    }, [flatTimings]);
+
+    return { activeCharIndex, activeCharProgress };
+}
+
+// Build flat timing array from normalized words (after splitWordToChars).
+// Returns a stable array of {startTime, endTime} for each character in order.
+function buildFlatTimings(words: ILyric.IWordData[]): { startTime: number; endTime: number }[] {
+    const result: { startTime: number; endTime: number }[] = [];
+    for (const word of words) {
+        const chars = splitWordToChars(word);
+        for (const c of chars) {
+            result.push({ startTime: c.startTime, endTime: c.startTime + c.duration });
+        }
+    }
+    return result;
+}
+
+// Wrapper: renders a word as multiple per-character KaraokeWords for true per-letter animation
+const KaraokeWordSplit = memo(({
+    word,
+    primaryColor,
+    highlightColor,
+    fontSize,
+    isCurrentLine,
+    enableFloat = true,
+    wordFloatEm = AMLL_WORD_FLOAT_EM,
+    isPseudo = false,
+    noSpace = false,
+    charFlatOffset,
+    activeCharIndex,
+    activeCharProgress,
+    emphasisTimings,
+}: {
+    word: ILyric.IWordData;
+    primaryColor: string;
+    highlightColor: string;
+    fontSize: number;
+    isCurrentLine: boolean;
+    enableFloat?: boolean;
+    wordFloatEm?: number;
+    isPseudo?: boolean;
+    noSpace?: boolean;
+    charFlatOffset: number;
+    activeCharIndex: SharedValue<number>;
+    activeCharProgress: SharedValue<number>;
+    emphasisTimings: Array<AmllEmphasisTiming | undefined>;
+}) => {
+    const subWords = useMemo(() => splitWordToChars(word), [word]);
+    const currentPositionMsShared = useCurrentPositionShared();
+    const wordFloatStyle = useAnimatedStyle(() => {
+        "worklet";
+        if (!enableFloat || isPseudo || !isCurrentLine) {
+            return { transform: [{ translateY: 0 }] };
+        }
+
+        const duration = Math.max(AMLL_MIN_DURATION_MS, Math.max(0, word.duration));
+        const rawProgress = (currentPositionMsShared.value - word.startTime) / duration;
+        const progress = Math.max(0, Math.min(1, rawProgress));
+        const easedProgress = cubicBezier(progress, 0, 0, 0.58, 1);
+
+        return {
+            transform: [{ translateY: -fontSize * wordFloatEm * easedProgress }],
+        };
+    }, [
+        enableFloat,
+        isPseudo,
+        isCurrentLine,
+        word.startTime,
+        word.duration,
+        fontSize,
+        wordFloatEm,
+    ]);
+
+    // AMll applies the base float to the whole timed word. Per-character motion
+    // is reserved for long emphasis words only.
+    if (subWords.length === 1) {
+        return (
+            <Animated.View
+                collapsable={false}
+                renderToHardwareTextureAndroid={enableFloat && isCurrentLine}
+                shouldRasterizeIOS={enableFloat && isCurrentLine}
+                style={wordFloatStyle}>
+                <KaraokeWord
+                    word={subWords[0]}
+                    primaryColor={primaryColor}
+                    highlightColor={highlightColor}
+                    fontSize={fontSize}
+                    isCurrentLine={isCurrentLine}
+                    noSpace={noSpace}
+                    charFlatIndex={charFlatOffset}
+                    activeCharIndex={activeCharIndex}
+                    activeCharProgress={activeCharProgress}
+                    emphasisTiming={isPseudo ? undefined : emphasisTimings[0]}
+                    wordFloatEm={wordFloatEm}
+                />
+            </Animated.View>
+        );
+    }
+
+    // Multi-character words keep a single base transform while AMll emphasis
+    // can add staggered motion to their character layers.
+    const groupTrailingSpace = !noSpace && word.space ? " " : "";
+    return (
+        <Animated.View
+            collapsable={false}
+            renderToHardwareTextureAndroid={enableFloat && isCurrentLine}
+            shouldRasterizeIOS={enableFloat && isCurrentLine}
+            style={[lyricStyles.charGroupRow, wordFloatStyle]}>
+            {subWords.map((charWord, i) => (
+                <KaraokeWord
+                    key={i}
+                    word={charWord}
+                    primaryColor={primaryColor}
+                    highlightColor={highlightColor}
+                    fontSize={fontSize}
+                    isCurrentLine={isCurrentLine}
+                    noSpace={true}
+                    charFlatIndex={charFlatOffset + i}
+                    activeCharIndex={activeCharIndex}
+                    activeCharProgress={activeCharProgress}
+                    emphasisTiming={isPseudo ? undefined : emphasisTimings[i]}
+                    wordFloatEm={wordFloatEm}
+                />
+            ))}
+            {groupTrailingSpace ? (
+                <Text style={{ fontSize, color: "transparent" }}>{" "}</Text>
+            ) : null}
+        </Animated.View>
+    );
+});
+
+const AmllEmphasisWrapper = memo(({
+    timing,
+    fontSize,
+    wordFloatEm = AMLL_WORD_FLOAT_EM,
+    children,
+}: {
+    timing: AmllEmphasisTiming;
+    fontSize: number;
+    wordFloatEm?: number;
+    children: React.ReactNode;
+}) => {
+    const currentPositionMsShared = useCurrentPositionShared();
+    const emphasisTransformStyle = useAnimatedStyle(() => {
+        "worklet";
+        const currentTime = currentPositionMsShared.value;
+        const progress = Math.max(0, Math.min(
+            1,
+            (currentTime - timing.startTime) / timing.duration,
+        ));
+        const emphasis = amllEmphasisEasing(progress);
+        const floatStartTime = timing.startTime - AMLL_EMPHASIS_FLOAT_LEAD_MS;
+        const floatDuration = timing.duration * AMLL_EMPHASIS_FLOAT_DURATION_RATIO;
+        const floatProgress = Math.max(0, Math.min(
+            1,
+            (currentTime - floatStartTime) / floatDuration,
+        ));
+        const floatOffset = Math.sin(floatProgress * Math.PI) * wordFloatEm;
+
+        const translateX = -emphasis * 0.03 * timing.amount *
+            timing.offsetFactor * fontSize;
+        const translateY = -fontSize *
+            (emphasis * 0.025 * timing.amount + floatOffset);
+        const scale = 1 + emphasis * 0.1 * timing.amount;
+
+        // AMll uses matrix3d specifically to avoid glyph-edge jitter while
+        // scaling and translating. Keep the same single-matrix composition.
+        return {
+            transform: [{
+                matrix: [
+                    scale, 0, 0, 0,
+                    0, scale, 0, 0,
+                    0, 0, 1, 0,
+                    translateX, translateY, 0, 1,
+                ],
+            }],
+        };
+    }, [timing, fontSize, wordFloatEm]);
+
+    return (
+        <Animated.View
+            collapsable={false}
+            renderToHardwareTextureAndroid
+            shouldRasterizeIOS
+            style={emphasisTransformStyle}>
+            {children}
+        </Animated.View>
+    );
+});
+
+type AmllGlowTextProps = {
+    timing: AmllEmphasisTiming;
+    fontSize: number;
+    color: string;
+    text: string;
+    onLayout: React.ComponentProps<typeof Text>["onLayout"];
+};
+
+const AmllAnimatedGlowText = memo(({
+    timing,
+    fontSize,
+    color,
+    text,
+    onLayout,
+}: AmllGlowTextProps) => {
+    const currentPositionMsShared = useCurrentPositionShared();
+    const emphasisGlowStyle = useAnimatedStyle(() => {
+        "worklet";
+        const progress = Math.max(0, Math.min(
+            1,
+            (currentPositionMsShared.value - timing.startTime) / timing.duration,
+        ));
+        const glowLevel = amllEmphasisEasing(progress) * timing.blur;
+        return {
+            textShadowColor: interpolateColor(
+                glowLevel,
+                [0, 0.8],
+                ["rgba(255, 255, 255, 0)", "rgba(255, 255, 255, 0.8)"],
+            ),
+            textShadowRadius: fontSize * Math.min(0.3, timing.blur * 0.3),
+        };
+    }, [timing, fontSize]);
+
+    return (
+        <Animated.Text
+            onLayout={onLayout}
+            style={[
+                styles.wordText,
+                emphasisGlowStyle,
+                {
+                    fontSize,
+                    color,
+                    opacity: 0.48,
+                    textShadowOffset: { width: 0, height: 0 },
+                },
+            ]}>
+            {text}
+        </Animated.Text>
+    );
+});
+
+const AmllGlowText = memo((props: AmllGlowTextProps) => {
+    // Animated textShadow forces Android to rerasterize glyphs every frame and
+    // defeats the hardware texture used for subpixel movement. AMll's motion is
+    // substantially smoother there without the costly shadow layer.
+    if (Platform.OS === "android") {
+        return (
+            <Text
+                onLayout={props.onLayout}
+                style={[
+                    styles.wordText,
+                    { fontSize: props.fontSize, color: props.color, opacity: 0.48 },
+                ]}>
+                {props.text}
+            </Text>
+        );
+    }
+
+    return <AmllAnimatedGlowText {...props} />;
+});
+
+// Individual glyph: continuous fill plus AMll's optional long-word emphasis.
+// All progress is evaluated from the smooth UI-thread playback clock.
+const KaraokeWord = memo(({
+    word,
+    primaryColor,
+    highlightColor,
+    fontSize,
+    isCurrentLine,
+    noSpace = false,
+    charFlatIndex,
+    activeCharIndex,
+    activeCharProgress,
+    emphasisTiming,
+    wordFloatEm = AMLL_WORD_FLOAT_EM,
+}: {
+    word: ILyric.IWordData;
+    primaryColor: string;
+    highlightColor: string;
+    fontSize: number;
+    isCurrentLine: boolean;
+    noSpace?: boolean;
+    charFlatIndex: number;
+    activeCharIndex: SharedValue<number>;
+    activeCharProgress: SharedValue<number>;
+    emphasisTiming?: AmllEmphasisTiming;
+    wordFloatEm?: number;
+}) => {
+    const { text, space } = word;
+    const [textWidth, setTextWidth] = useState(0);
+
+    // Trailing space as text (matches non-playing line text wrapping)
+    const trailingSpace = !noSpace && space ? " " : "";
+
+    // True karaoke fill: completed characters are fully filled while the active
+    // character is clipped continuously from left to right. This avoids changing
+    // the brightness of an entire glyph at once and remains stable after wrapping.
+    const fillProgress = useDerivedValue(() => {
+        "worklet";
+        if (!isCurrentLine) return 0;
+
+        const idx = activeCharIndex.value;
+        if (charFlatIndex < idx) return 1;
+        if (charFlatIndex > idx) return 0;
+        return activeCharProgress.value;
+    }, [isCurrentLine, charFlatIndex]);
+
+    const fillMaskStyle = useAnimatedStyle(() => {
+        "worklet";
+        return { width: fillProgress.value * textWidth };
+    }, [textWidth]);
+
+    // For non-current lines: same View wrapper structure for consistent flex layout
+    if (!isCurrentLine) {
+        return (
+            <View style={styles.wordWrapper}>
+                <Text
+                    style={[
+                        styles.wordText,
+                        { fontSize, color: primaryColor, opacity: 0.5 },
+                    ]}
+                >
+                    {text}{trailingSpace}
+                </Text>
+            </View>
+        );
+    }
+
+    const handleTextLayout: React.ComponentProps<typeof Text>["onLayout"] = event => {
+        const width = event.nativeEvent.layout.width;
+        if (width > 0 && Math.abs(width - textWidth) > 0.5) {
+            // Defer to avoid setState during parent layout/commit on RN Fabric.
+            requestAnimationFrame(() => {
+                setTextWidth(width);
+            });
+        }
+    };
+    const baseText = emphasisTiming ? (
+        <AmllGlowText
+            timing={emphasisTiming}
+            fontSize={fontSize}
+            color={primaryColor}
+            text={`${text}${trailingSpace}`}
+            onLayout={handleTextLayout}
+        />
+    ) : (
         <Text
+            onLayout={handleTextLayout}
+            style={[
+                styles.wordText,
+                { fontSize, color: primaryColor, opacity: 0.48 },
+            ]}>
+            {text}{trailingSpace}
+        </Text>
+    );
+    const content = (
+        <View style={styles.wordWrapper}>
+            {baseText}
+            <Animated.View
+                pointerEvents="none"
+                style={[styles.wordFillOverlay, fillMaskStyle]}>
+                <Text
+                    numberOfLines={1}
+                    style={[
+                        styles.wordText,
+                        {
+                            width: textWidth || undefined,
+                            fontSize,
+                            color: highlightColor,
+                            opacity: 0.98,
+                        },
+                    ]}>
+                    {text}{trailingSpace}
+                </Text>
+            </Animated.View>
+        </View>
+    );
+
+    // The highlighted copy is masked instead of recoloring the complete glyph.
+    // Both copies use identical text metrics, keeping the sweep pixel-aligned.
+    return emphasisTiming ? (
+        <AmllEmphasisWrapper
+            timing={emphasisTiming}
+            fontSize={fontSize}
+            wordFloatEm={wordFloatEm}>
+            {content}
+        </AmllEmphasisWrapper>
+    ) : content;
+});
+
+const TranslationTextLine = memo(({
+    text,
+    fontSize,
+    highlightColor,
+    highlight = false,
+    inactiveOpacity = 0.5,
+    align = "center",
+}: {
+    text: string;
+    fontSize: number;
+    highlightColor: string;
+    highlight?: boolean;
+    inactiveOpacity?: number;
+    align?: LyricAlign;
+}) => {
+    return (
+        <View style={[
+            styles.translationLineContainer,
+            { alignItems: getLyricFlexAlignment(align) },
+        ]}>
+            <Text
+                style={[
+                    styles.wordText,
+                    {
+                        fontSize,
+                        textAlign: align,
+                        color: highlight ? highlightColor : "white",
+                        opacity: highlight ? TRANSLATION_HIGHLIGHT_OPACITY : inactiveOpacity,
+                    },
+                ]}
+            >
+                {text}
+            </Text>
+        </View>
+    );
+});
+
+// Static word-by-word layout for non-current lines.
+// Uses identical View + flexWrap structure as WordByWordLyricLine
+// but does NOT subscribe to useCurrentPositionMs() — zero per-frame cost.
+function StaticWordByWordLine({
+    words,
+    romanizationWords,
+    isRomanizationPseudo,
+    translation,
+    lyricOrder = ["romanization", "original", "translation"],
+    fontSize,
+    index,
+    onLayout,
+    align = "center",
+    containerStyle,
+}: {
+    words: ILyric.IWordData[];
+    romanizationWords?: ILyric.IWordData[];
+    isRomanizationPseudo?: boolean;
+    translation?: string;
+    lyricOrder?: ("original" | "translation" | "romanization")[];
+    fontSize: number;
+    index?: number;
+    onLayout?: (index: number, height: number) => void;
+    align?: LyricAlign;
+    containerStyle?: StyleProp<ViewStyle>;
+}) {
+    const getLineFontSize = (isFirst: boolean) => isFirst ? fontSize : fontSize * SECONDARY_FONT_RATIO;
+    const justifyContent = getLyricFlexAlignment(align);
+
+    // Render a static word row using IDENTICAL View structure as the playing line
+    // (View + flexWrap with per-word/per-char Views) to guarantee identical line-breaking.
+    // Only difference: no animated wrappers, static opacity.
+    const renderWordRow = (wordList: ILyric.IWordData[], lineFontSize: number, isFirst: boolean, key: string, noSpace?: boolean) => {
+        const normalized = normalizeWordSpaces(wordList);
+        return (
+            <View style={[lyricStyles.wordByWordLine, { justifyContent }, !isFirst && lyricStyles.secondaryLine]} key={key}>
+                {normalized.map((word, i) => {
+                    const subWords = splitWordToChars(word);
+                    // Single char — same as KaraokeWord non-current path
+                    if (subWords.length === 1) {
+                        const sw = subWords[0];
+                        const trailing = !noSpace && sw.space ? " " : "";
+                        return (
+                            <View style={styles.wordWrapper} key={i}>
+                                <Text style={[styles.wordText, { fontSize: lineFontSize, color: "white" }]}>
+                                    {sw.text}{trailing}
+                                </Text>
+                            </View>
+                        );
+                    }
+                    // Multi-char — same charGroupRow + per-char Views as KaraokeWordSplit
+                    const groupTrailingSpace = !noSpace && word.space ? " " : "";
+                    return (
+                        <View style={lyricStyles.charGroupRow} key={i}>
+                            {subWords.map((sw, ci) => (
+                                <View style={styles.wordWrapper} key={ci}>
+                                    <Text style={[styles.wordText, { fontSize: lineFontSize, color: "white" }]}>
+                                        {sw.text}
+                                    </Text>
+                                </View>
+                            ))}
+                            {groupTrailingSpace ? (
+                                <Text style={{ fontSize: lineFontSize, color: "transparent" }}>{" "}</Text>
+                            ) : null}
+                        </View>
+                    );
+                })}
+            </View>
+        );
+    };
+
+    const existingLines = lyricOrder.filter(type => {
+        if (type === "original") return true;
+        if (type === "romanization") return romanizationWords && romanizationWords.length > 0;
+        if (type === "translation") return !!translation;
+        return false;
+    });
+
+    const renderLine = (type: string, isFirst: boolean) => {
+        switch (type) {
+        case "original":
+            return renderWordRow(words, getLineFontSize(isFirst), isFirst, "original");
+        case "romanization":
+            return romanizationWords && romanizationWords.length > 0
+                ? renderWordRow(romanizationWords, getLineFontSize(isFirst), isFirst, "romanization", isRomanizationPseudo)
+                : null;
+        case "translation":
+            return translation ? (
+                <View
+                    key="translation"
+                    style={[{ width: "100%" }, !isFirst && lyricStyles.secondaryLine]}
+                >
+                    <TranslationTextLine
+                        text={translation}
+                        fontSize={getLineFontSize(isFirst)}
+                        highlightColor="white"
+                        inactiveOpacity={1}
+                        align={align}
+                    />
+                </View>
+            ) : null;
+        default:
+            return null;
+        }
+    };
+
+    return (
+        <View
             onLayout={({ nativeEvent }) => {
                 if (index !== undefined) {
                     onLayout?.(index, nativeEvent.layout.height);
                 }
             }}
             style={[
-                lyricStyles.item,
-                {
-                    fontSize: fontSize || fontSizeConst.content,
-                },
-                highlight
-                    ? [
-                        lyricStyles.highlightItem,
-                        {
-                            color: colors.primary,
-                        },
-                    ]
-                    : null,
-                light ? lyricStyles.draggingItem : null,
-            ]}>
+                lyricStyles.multiLineContainer,
+                { alignItems: getLyricFlexAlignment(align), opacity: 0.5 },
+                containerStyle,
+            ]}
+        >
+            {lyricOrder.map((type) => {
+                const isFirstExisting = existingLines.indexOf(type) === 0;
+                return renderLine(type, isFirstExisting);
+            })}
+        </View>
+    );
+}
+
+// Word-by-word lyric line with scale animation - supports 3 lines
+interface IWordByWordLyricProps {
+    words: ILyric.IWordData[];
+    romanizationWords?: ILyric.IWordData[];
+    isRomanizationPseudo?: boolean;
+    translation?: string;
+    translationWords?: ILyric.IWordData[];
+    hasTranslationWordByWord?: boolean;
+    lyricOrder?: ("original" | "translation" | "romanization")[];
+    fontSize: number;
+    highlightColor: string;
+    index?: number;
+    onLayout?: (index: number, height: number) => void;
+    enableFloat?: boolean;
+    wordFloatEm?: number;
+    align?: LyricAlign;
+    isCurrentLine?: boolean;
+    containerStyle?: StyleProp<ViewStyle>;
+}
+
+function WordByWordLyricLine({
+    words,
+    romanizationWords,
+    isRomanizationPseudo,
+    translation,
+    lyricOrder = ["romanization", "original", "translation"],
+    fontSize,
+    highlightColor,
+    index,
+    onLayout,
+    enableFloat = true,
+    wordFloatEm = AMLL_WORD_FLOAT_EM,
+    align = "center",
+    isCurrentLine = true,
+    containerStyle,
+}: IWordByWordLyricProps) {
+    // Normalize space flags to prevent double spaces in all word lists
+    const normalizedWords = useMemo(() => normalizeWordSpaces(words), [words]);
+    const normalizedRomanizationWords = useMemo(
+        () => romanizationWords ? normalizeWordSpaces(romanizationWords) : undefined,
+        [romanizationWords],
+    );
+    const originalEmphasisTimings = useMemo(
+        () => buildAmllEmphasisTimings(normalizedWords),
+        [normalizedWords],
+    );
+    const romanizationEmphasisTimings = useMemo(
+        () => normalizedRomanizationWords
+            ? buildAmllEmphasisTimings(normalizedRomanizationWords)
+            : [],
+        [normalizedRomanizationWords],
+    );
+
+    // Build flat timing arrays and char offset maps for each word list
+    const originalFlatTimings = useMemo(() => buildFlatTimings(normalizedWords), [normalizedWords]);
+    const romanizationFlatTimings = useMemo(
+        () => normalizedRomanizationWords ? buildFlatTimings(normalizedRomanizationWords) : [],
+        [normalizedRomanizationWords],
+    );
+
+    // Compute per-word char offsets (cumulative char count before each word)
+    const originalCharOffsets = useMemo(() => {
+        const offsets: number[] = [];
+        let acc = 0;
+        for (const w of normalizedWords) {
+            offsets.push(acc);
+            acc += splitWordToChars(w).length;
+        }
+        return offsets;
+    }, [normalizedWords]);
+
+    const romanizationCharOffsets = useMemo(() => {
+        if (!normalizedRomanizationWords) return [];
+        const offsets: number[] = [];
+        let acc = 0;
+        for (const w of normalizedRomanizationWords) {
+            offsets.push(acc);
+            acc += splitWordToChars(w).length;
+        }
+        return offsets;
+    }, [normalizedRomanizationWords]);
+
+    // Line-level active state tracking — ONE useDerivedValue per word list reads currentPositionMsShared
+    const originalActive = useLineActiveState(originalFlatTimings);
+    const romanizationActive = useLineActiveState(romanizationFlatTimings);
+
+    // Font size based on order: first line uses full fontSize, others use smaller
+    const getLineFontSize = (isFirst: boolean) => isFirst ? fontSize : fontSize * SECONDARY_FONT_RATIO;
+    const justifyContent = getLyricFlexAlignment(align);
+
+    // Original line component (word-by-word)
+    const originalLine = (isFirst: boolean) => (
+        <View style={[lyricStyles.wordByWordLine, { justifyContent }, !isFirst && lyricStyles.secondaryLine]} key="original">
+            {normalizedWords.map((word, wordIndex) => (
+                <KaraokeWordSplit
+                    key={wordIndex}
+                    word={word}
+                    primaryColor="white"
+                    highlightColor={highlightColor}
+                    fontSize={getLineFontSize(isFirst)}
+                    isCurrentLine={isCurrentLine}
+                    enableFloat={enableFloat}
+                    wordFloatEm={wordFloatEm}
+                    charFlatOffset={originalCharOffsets[wordIndex]}
+                    activeCharIndex={originalActive.activeCharIndex}
+                    activeCharProgress={originalActive.activeCharProgress}
+                    emphasisTimings={originalEmphasisTimings[wordIndex]}
+                />
+            ))}
+        </View>
+    );
+
+    // Romanization line component
+    const romanizationLine = (isFirst: boolean) => normalizedRomanizationWords && normalizedRomanizationWords.length > 0 && (
+        <View style={[lyricStyles.wordByWordLine, { justifyContent }, !isFirst && lyricStyles.secondaryLine]} key="romanization">
+            {normalizedRomanizationWords.map((word, wordIndex) => (
+                <KaraokeWordSplit
+                    key={wordIndex}
+                    word={word}
+                    primaryColor="white"
+                    highlightColor={highlightColor}
+                    fontSize={getLineFontSize(isFirst)}
+                    isCurrentLine={isCurrentLine}
+                    enableFloat={enableFloat}
+                    wordFloatEm={wordFloatEm}
+                    isPseudo={isRomanizationPseudo}
+                    noSpace={true}
+                    charFlatOffset={romanizationCharOffsets[wordIndex]}
+                    activeCharIndex={romanizationActive.activeCharIndex}
+                    activeCharProgress={romanizationActive.activeCharProgress}
+                    emphasisTimings={romanizationEmphasisTimings[wordIndex]}
+                />
+            ))}
+        </View>
+    );
+
+    // Translation line component
+    const translationLine = (isFirst: boolean) => translation && (
+        <View style={[{ width: "100%" }, !isFirst && lyricStyles.secondaryLine]} key="translation">
+            <TranslationTextLine
+                text={translation}
+                fontSize={getLineFontSize(isFirst)}
+                highlightColor={highlightColor}
+                highlight={isCurrentLine}
+                align={align}
+            />
+        </View>
+    );
+
+    // Render lines based on order
+    const renderLine = (type: string, isFirst: boolean) => {
+        switch (type) {
+        case "original":
+            return originalLine(isFirst);
+        case "romanization":
+            return romanizationLine(isFirst);
+        case "translation":
+            return translationLine(isFirst);
+        default:
+            return null;
+        }
+    };
+
+    // Determine which lines actually exist
+    const existingLines = lyricOrder.filter(type => {
+        if (type === "original") return true; // Original always exists
+        if (type === "romanization") return romanizationWords && romanizationWords.length > 0;
+        if (type === "translation") return translation;
+        return false;
+    });
+
+    return (
+        <View
+            onLayout={({ nativeEvent }) => {
+                if (index !== undefined) {
+                    onLayout?.(index, nativeEvent.layout.height);
+                }
+            }}
+            style={[
+                lyricStyles.multiLineContainer,
+                { alignItems: getLyricFlexAlignment(align) },
+                containerStyle,
+            ]}
+        >
+            {/* Render lines in configured order, first existing line gets large font */}
+            {lyricOrder.map(type => {
+                const isFirstExisting = existingLines.indexOf(type) === 0;
+                return renderLine(type, isFirstExisting);
+            })}
+        </View>
+    );
+}
+
+// Regular lyric line - with scale animation for highlighted line
+function RegularLyricLine({
+    text,
+    fontSize,
+    highlight,
+    light,
+    index,
+    onLayout,
+    primaryColor,
+    align = "center",
+    containerStyle,
+}: {
+    text: string;
+    fontSize: number;
+    highlight: boolean;
+    light: boolean;
+    index?: number;
+    onLayout?: (index: number, height: number) => void;
+    primaryColor: string;
+    align?: LyricAlign;
+    containerStyle?: StyleProp<ViewStyle>;
+}) {
+    const textOpacity = useSharedValue(highlight ? 1 : 0.5);
+    const textScale = useSharedValue(highlight ? HIGHLIGHT_SCALE : 1);
+
+    useEffect(() => {
+        if (highlight) {
+            textOpacity.value = withTiming(1, { duration: 280 });
+            textScale.value = withTiming(HIGHLIGHT_SCALE, SCALE_TIMING_CONFIG);
+        } else {
+            textOpacity.value = withTiming(0.5, { duration: 280 });
+            textScale.value = withTiming(1, SCALE_TIMING_CONFIG);
+        }
+    }, [highlight, textOpacity, textScale]);
+
+    const animatedStyle = useAnimatedStyle(() => ({
+        opacity: textOpacity.value,
+        transform: [{ scale: textScale.value }],
+    }));
+
+    // Transform origin based on alignment
+    const transformOriginStyle = getLyricTransformOriginStyle(align);
+
+    // Outer View reports full row height for FlatList getItemLayout.
+    // Measuring Animated.Text alone can under-report on some devices and makes
+    // line-by-line lyrics scroll short of center (current line below viewport).
+    return (
+        <View
+            onLayout={({ nativeEvent }) => {
+                if (index !== undefined) {
+                    onLayout?.(index, nativeEvent.layout.height);
+                }
+            }}
+            style={containerStyle}>
+            <Animated.Text
+                style={[
+                    lyricStyles.item,
+                    { fontSize, textAlign: align },
+                    transformOriginStyle,
+                    animatedStyle,
+                    highlight ? [lyricStyles.highlightItem, { color: primaryColor }] : null,
+                    light ? lyricStyles.draggingItem : null,
+                ]}
+            >
+                {text}
+            </Animated.Text>
+        </View>
+    );
+}
+
+// Multi-line regular lyric with font size based on order and scale animation
+function MultiLineRegularLyric({
+    text,
+    romanizationText,
+    romanizationWords,
+    translation,
+    lyricOrder = ["romanization", "original", "translation"],
+    fontSize,
+    highlight,
+    light,
+    primaryColor,
+    index,
+    onLayout,
+    align = "center",
+    containerStyle,
+}: {
+    text: string;
+    romanizationText?: string;
+    romanizationWords?: ILyric.IWordData[];
+    translation?: string;
+    lyricOrder?: ("original" | "translation" | "romanization")[];
+    fontSize: number;
+    highlight: boolean;
+    light: boolean;
+    primaryColor: string;
+    index?: number;
+    onLayout?: (index: number, height: number) => void;
+    align?: LyricAlign;
+    containerStyle?: StyleProp<ViewStyle>;
+}) {
+    // Scale animation for highlight effect
+    const containerScale = useSharedValue(highlight ? HIGHLIGHT_SCALE : 1);
+    const containerOpacity = useSharedValue(highlight ? 1 : 0.5);
+
+    useEffect(() => {
+        if (highlight) {
+            containerScale.value = withTiming(HIGHLIGHT_SCALE, SCALE_TIMING_CONFIG);
+            containerOpacity.value = withTiming(1, { duration: 280 });
+        } else {
+            containerScale.value = withTiming(1, SCALE_TIMING_CONFIG);
+            containerOpacity.value = withTiming(0.5, { duration: 280 });
+        }
+    }, [containerOpacity, containerScale, highlight]);
+
+    const animatedContainerStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: containerScale.value }],
+        opacity: containerOpacity.value,
+    }));
+
+    // Transform origin based on alignment
+    const transformOriginStyle = getLyricTransformOriginStyle(align);
+
+    // Font size based on order: first line uses full fontSize, others use smaller
+    const getLineFontSize = (isFirst: boolean) => isFirst ? fontSize : fontSize * SECONDARY_FONT_RATIO;
+
+    const textAlign = align;
+
+    // Get style based on highlight state
+    const getLineStyle = (isFirst: boolean) => [
+        lyricStyles.compactItem,
+        { fontSize: getLineFontSize(isFirst), textAlign },
+        !isFirst && lyricStyles.secondaryLine,
+        highlight && [lyricStyles.highlightItem, { color: primaryColor }],
+        light && lyricStyles.draggingItem,
+    ];
+
+    // Original line component (use compactItem for tight spacing within group)
+    const originalLine = (isFirst: boolean) => text && (
+        <Text key="original" style={getLineStyle(isFirst)}>
             {text}
         </Text>
     );
+
+    // Romanization line component - use flex layout when words available for consistent spacing
+    const justifyContent = getLyricFlexAlignment(align);
+    const romanizationLine = (isFirst: boolean) => {
+        if (!romanizationText && (!romanizationWords || romanizationWords.length === 0)) return null;
+
+        // Use word-by-word flex layout to match highlighted line spacing
+        if (romanizationWords && romanizationWords.length > 0) {
+            return (
+                <View
+                    key="romanization"
+                    style={[
+                        lyricStyles.wordByWordLine,
+                        { justifyContent },
+                        !isFirst && lyricStyles.secondaryLine,
+                    ]}
+                >
+                    {romanizationWords.map((word, wordIndex) => (
+                        <Text
+                            key={wordIndex}
+                            style={[
+                                styles.wordText,
+                                {
+                                    fontSize: getLineFontSize(isFirst),
+                                    color: highlight ? primaryColor : "white",
+                                    opacity: highlight ? 1 : 0.5,
+                                },
+                                highlight && lyricStyles.highlightItem,
+                                light && lyricStyles.draggingItem,
+                            ]}
+                        >
+                            {word.text}
+                        </Text>
+                    ))}
+                </View>
+            );
+        }
+
+        // Fallback to single text when no word data
+        return (
+            <Text key="romanization" style={getLineStyle(isFirst)}>
+                {romanizationText}
+            </Text>
+        );
+    };
+
+    // Translation line component
+    const translationLine = (isFirst: boolean) => translation && (
+        <View key="translation" style={[{ width: "100%" }, !isFirst && lyricStyles.secondaryLine]}>
+            <TranslationTextLine
+                text={translation}
+                fontSize={getLineFontSize(isFirst)}
+                highlightColor={primaryColor}
+                highlight={highlight}
+                inactiveOpacity={1}
+                align={align}
+            />
+        </View>
+    );
+
+    // Render line based on type
+    const renderLine = (type: string, isFirst: boolean) => {
+        switch (type) {
+        case "original":
+            return originalLine(isFirst);
+        case "romanization":
+            return romanizationLine(isFirst);
+        case "translation":
+            return translationLine(isFirst);
+        default:
+            return null;
+        }
+    };
+
+    // Determine which lines actually exist
+    const existingLines = lyricOrder.filter(type => {
+        if (type === "original") return !!text;
+        if (type === "romanization") return !!romanizationText || (romanizationWords && romanizationWords.length > 0);
+        if (type === "translation") return !!translation;
+        return false;
+    });
+
+    return (
+        <Animated.View
+            onLayout={({ nativeEvent }) => {
+                if (index !== undefined) {
+                    onLayout?.(index, nativeEvent.layout.height);
+                }
+            }}
+            style={[
+                lyricStyles.multiLineContainer,
+                { alignItems: getLyricFlexAlignment(align) },
+                transformOriginStyle,
+                animatedContainerStyle,
+                containerStyle,
+            ]}
+        >
+            {/* Render lines in configured order, first existing line gets large font */}
+            {lyricOrder.map(type => {
+                const isFirstExisting = existingLines.indexOf(type) === 0;
+                return renderLine(type, isFirstExisting);
+            })}
+        </Animated.View>
+    );
 }
-// 歌词
+
+function LyricItemView(props: ILyricItemComponentProps) {
+    const {
+        light,
+        highlight,
+        text,
+        onLayout,
+        index,
+        fontSize,
+        words,
+        hasWordByWord,
+        romanizationWords,
+        romanization,
+        hasRomanizationWordByWord,
+        isRomanizationPseudo,
+        translation,
+        translationWords,
+        hasTranslationWordByWord,
+        lyricOrder,
+        align,
+        interludeStartTimeMs,
+        interludeEndTimeMs,
+        containerStyle,
+        wordFloatEm = AMLL_WORD_FLOAT_EM,
+    } = props;
+
+    const colors = useColors();
+    const actualFontSize = fontSize || fontSizeConst.content;
+    const enableFloat = useAppConfig("lyric.enableWordByWordFloat") ?? true;
+    const pureWhiteMode = useAppConfig("lyric.pureWhiteMode") ?? true;
+    const enableBreathingDots = useAppConfig("lyric.enableBreathingDots") ?? true;
+
+    const effectiveHighlightColor = pureWhiteMode ? "white" : colors.primary;
+
+    // Render word-by-word layout for ALL lines with word data (both playing and non-playing)
+    // This ensures identical flex-wrap line-breaking behavior
+    // Non-current lines use StaticWordByWordLine (no useCurrentPositionMs subscription)
+    if (hasWordByWord && words && words.length > 0) {
+        if (!highlight) {
+            // Static layout: same View + flexWrap structure, zero per-frame cost
+            return (
+                <StaticWordByWordLine
+                    words={words}
+                    romanizationWords={hasRomanizationWordByWord ? romanizationWords : undefined}
+                    isRomanizationPseudo={isRomanizationPseudo}
+                    translation={translation}
+                    lyricOrder={lyricOrder}
+                    fontSize={actualFontSize}
+                    index={index}
+                    onLayout={onLayout}
+                    align={align}
+                    containerStyle={containerStyle}
+                />
+            );
+        }
+        return (
+            <WordByWordLyricLine
+                words={words}
+                romanizationWords={hasRomanizationWordByWord ? romanizationWords : undefined}
+                isRomanizationPseudo={isRomanizationPseudo}
+                translation={translation}
+                translationWords={hasTranslationWordByWord ? translationWords : undefined}
+                hasTranslationWordByWord={hasTranslationWordByWord}
+                lyricOrder={lyricOrder}
+                fontSize={actualFontSize}
+                highlightColor={effectiveHighlightColor}
+                index={index}
+                onLayout={onLayout}
+                enableFloat={enableFloat}
+                wordFloatEm={wordFloatEm}
+                align={align}
+                isCurrentLine={true}
+                containerStyle={containerStyle}
+            />
+        );
+    }
+
+    // Check if lyric text is empty (empty string or only whitespace)
+    const isEmptyLyric =
+        (!text || text.trim() === "") &&
+        (!translation || translation.trim() === "") &&
+        (!romanization || romanization.trim() === "") &&
+        (!romanizationWords || romanizationWords.length === 0);
+    const hasRenderableInterlude =
+        interludeStartTimeMs !== undefined &&
+        interludeEndTimeMs !== undefined &&
+        interludeEndTimeMs - interludeStartTimeMs >=
+            AMLL_INTERLUDE_MIN_DURATION_MS;
+
+    // Render breathing dots ONLY for current playing empty line (highlight=true)
+    if (
+        isEmptyLyric &&
+        enableBreathingDots &&
+        highlight &&
+        hasRenderableInterlude
+    ) {
+        return (
+            <View
+                onLayout={({ nativeEvent }) => {
+                    if (index !== undefined) {
+                        onLayout?.(index, nativeEvent.layout.height);
+                    }
+                }}
+                style={[
+                    lyricStyles.multiLineContainer,
+                    { alignItems: getLyricFlexAlignment(align) },
+                    containerStyle,
+                ]}
+            >
+                <BreathingDots
+                    color={effectiveHighlightColor}
+                    align={align}
+                    fontSize={actualFontSize}
+                    startTimeMs={interludeStartTimeMs}
+                    endTimeMs={interludeEndTimeMs}
+                />
+            </View>
+        );
+    }
+
+    // If breathing dots disabled, render empty space for empty lyrics
+    if (isEmptyLyric) {
+        return (
+            <View
+                onLayout={({ nativeEvent }) => {
+                    if (index !== undefined) {
+                        onLayout?.(index, nativeEvent.layout.height);
+                    }
+                }}
+                style={[
+                    lyricStyles.multiLineContainer,
+                    { alignItems: getLyricFlexAlignment(align) },
+                    containerStyle,
+                ]}
+            />
+        );
+    }
+
+    // Check if we have multi-line content (translation or romanization)
+    const hasMultiLine = !!(translation || romanization || (romanizationWords && romanizationWords.length > 0));
+
+    // Use multi-line component for lines with multi-line content
+    if (hasMultiLine) {
+        return (
+            <MultiLineRegularLyric
+                text={text || ""}
+                romanizationText={romanization}
+                romanizationWords={romanizationWords}
+                translation={translation}
+                lyricOrder={lyricOrder}
+                fontSize={actualFontSize}
+                highlight={!!highlight}
+                light={!!light}
+                primaryColor={effectiveHighlightColor}
+                index={index}
+                onLayout={onLayout}
+                align={align}
+                containerStyle={containerStyle}
+            />
+        );
+    }
+
+    // Single line regular lyric rendering
+    return (
+        <RegularLyricLine
+            text={text || ""}
+            fontSize={actualFontSize}
+            highlight={!!highlight}
+            light={!!light}
+            index={index}
+            onLayout={onLayout}
+            primaryColor={effectiveHighlightColor}
+            align={align}
+            containerStyle={containerStyle}
+        />
+    );
+}
+
+const arraysEqual = (a?: any[], b?: any[]) => {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+};
+
 const LyricItemComponent = memo(
-    _LyricItemComponent,
+    LyricItemView,
     (prev, curr) =>
         prev.light === curr.light &&
         prev.highlight === curr.highlight &&
         prev.text === curr.text &&
         prev.index === curr.index &&
-        prev.fontSize === curr.fontSize,
+        prev.fontSize === curr.fontSize &&
+        prev.words === curr.words &&
+        prev.hasWordByWord === curr.hasWordByWord &&
+        prev.hasRomanizationWordByWord === curr.hasRomanizationWordByWord &&
+        prev.isRomanizationPseudo === curr.isRomanizationPseudo &&
+        prev.hasTranslationWordByWord === curr.hasTranslationWordByWord &&
+        prev.romanization === curr.romanization &&
+        prev.romanizationWords === curr.romanizationWords &&
+        prev.translation === curr.translation &&
+        prev.translationWords === curr.translationWords &&
+        prev.align === curr.align &&
+        prev.interludeStartTimeMs === curr.interludeStartTimeMs &&
+        prev.interludeEndTimeMs === curr.interludeEndTimeMs &&
+        prev.containerStyle === curr.containerStyle &&
+        prev.wordFloatEm === curr.wordFloatEm &&
+        arraysEqual(prev.lyricOrder, curr.lyricOrder),
 );
 
 export default LyricItemComponent;
 
+const styles = StyleSheet.create({
+    wordWrapper: {
+        position: "relative",
+    },
+    wordText: {
+        fontWeight: "600",
+    },
+    wordFillOverlay: {
+        position: "absolute",
+        left: 0,
+        top: 0,
+        bottom: 0,
+        overflow: "hidden",
+    },
+    translationLineContainer: {
+        position: "relative",
+        width: "100%",
+        alignItems: "center",
+        justifyContent: "center",
+    },
+});
+
 const lyricStyles = StyleSheet.create({
     highlightItem: {
         opacity: 1,
+        textShadowOffset: { width: 0, height: 0 },
+        textShadowRadius: 6,
     },
     item: {
         color: "white",
-        opacity: 0.6,
+        opacity: 0.5,
         paddingHorizontal: rpx(64),
         paddingVertical: rpx(24),
         width: "100%",
         textAlign: "center",
         textAlignVertical: "center",
     },
+    // Compact item for multi-line groups (no padding, container handles it)
+    compactItem: {
+        color: "white",
+        opacity: 0.5,
+        width: "100%",
+        textAlign: "center",
+        textAlignVertical: "center",
+    },
+    multiLineContainer: {
+        flexDirection: "column",
+        alignItems: "center",
+        paddingHorizontal: rpx(64),
+        paddingVertical: rpx(24),
+        width: "100%",
+    },
+    wordByWordLine: {
+        flexDirection: "row",
+        flexWrap: "wrap",
+        justifyContent: "center",
+        // Fabric can call ParagraphShadowNode::baseline while a seek swaps
+        // static and animated glyph trees, mutating an already sealed node.
+        alignItems: "flex-end",
+        width: "100%",
+    },
+    charGroupRow: {
+        flexDirection: "row",
+        alignItems: "flex-end",
+    },
+    secondaryLine: {
+        marginTop: rpx(8),
+    },
     draggingItem: {
         opacity: 0.9,
         color: "white",
+    },
+});
+
+const dotsStyles = StyleSheet.create({
+    container: {
+        width: "100%",
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    dotsRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
     },
 });
