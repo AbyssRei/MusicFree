@@ -1,3 +1,19 @@
-{"version":"0.6.2","changeLog":[
-  "【优化】优化了软件启动速度 (需要在【侧边栏-基本设置-插件】中打开【启用插件懒加载】开关)"
-],"download":["https://r0rvr854dd1.feishu.cn/drive/folder/KLqKfWOA3lx8MKdo8xNcYpR8n7t"]}
+{
+  "version": "0.7.0",
+  "changeLog": [
+    "【说明】版本号继承上游 maotoumao/MusicFree v0.6.2 并递增次版本号",
+    "【歌词】新增逐词歌词引擎：QRC 解密、卡拉OK逐字渲染、桌面歌词与迷你歌词",
+    "【播放】新增 MV 播放、沉浸式封面样式、长按关联自定义封面与按 ID 播放",
+    "【下载】迁移原生下载队列，支持 CENC 流解密与 M4A/OGG 封面标签写入",
+    "【音质】支持自定义音质键与 vinyl/mgg/杜比等音质等级",
+    "【备份】统一 MusicFree 与 BakaMusic 备份格式，损坏备份解析容错",
+    "【插件】加固插件沙箱（环境变量重绑定、GB18030 解码）并默认懒加载",
+    "【界面】重构主题系统与沉浸式视觉，改版首页、搜索与列表页",
+    "【平台】Android 适配新架构并迁移包名至 fun.xwj，新增 iOS 支持",
+    "【架构】升级 React Native 0.86、React 19.2 与 Expo 57"
+  ],
+  "download": [
+    "https://github.com/AbyssRei/MusicFree/releases/download/v0.7.0/MusicFree-v0.7.0-arm64-v8a-release.apk",
+    "https://github.com/AbyssRei/MusicFree/releases/download/v0.7.0/MusicFree-v0.7.0-universal-release.apk"
+  ]
+}

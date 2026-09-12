@@ -4,12 +4,12 @@ import DeviceInfo from "react-native-device-info";
 import { devLog } from "@/utils/log";
 
 const updateList = [
-    "https://raw.githubusercontent.com/Toskysun/MusicFree/master/release/version.json",
-    "https://cdn.jsdelivr.net/gh/Toskysun/MusicFree@master/release/version.json",
+    "https://raw.githubusercontent.com/AbyssRei/MusicFree/master/release/version.json",
+    "https://cdn.jsdelivr.net/gh/AbyssRei/MusicFree@master/release/version.json",
 ];
 
 // GitHub API备选方案
-const GITHUB_API_URL = "https://api.github.com/repos/Toskysun/MusicFree/releases/latest";
+const GITHUB_API_URL = "https://api.github.com/repos/AbyssRei/MusicFree/releases/latest";
 
 interface IUpdateInfo {
     needUpdate: boolean;
