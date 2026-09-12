@@ -7,6 +7,45 @@ declare namespace IPlugin {
         userAgent?: string;
         /** 音质 */
         quality?: IMusic.IQualityKey;
+        /** 加密音频源所需的密钥，由播放器代理消费 */
+        ekey?: string;
+        /** CENC 音频源所需的内容密钥，由播放器代理消费 */
+        cek?: string;
+    }
+
+    /** 视频动态范围。 */
+    export type VideoDynamicRange = "sdr" | "hdr10" | "dolby-vision";
+
+    /** 插件提供的 MV 质量档位。 */
+    export interface IVideoQualityOption {
+        key: string;
+        label?: string;
+        width?: number;
+        height?: number;
+        bitrate?: number;
+        size?: number | string;
+        codec?: string;
+        mimeType?: string;
+        dynamicRange?: VideoDynamicRange;
+    }
+
+    /** 插件返回的 MV 播放源。 */
+    export interface IVideoSourceResult {
+        url?: string;
+        headers?: Record<string, string>;
+        userAgent?: string;
+        videoQuality?: string;
+        mimeType?: string;
+        codec?: string;
+        dynamicRange?: VideoDynamicRange;
+        bitrate?: number;
+        size?: number | string;
+        duration?: number;
+        width?: number;
+        height?: number;
+        availableVideoQualities?: (string | IVideoQualityOption)[];
+        backupUrls?: string[];
+        expiresAt?: number;
     }
 
     export interface ISearchResult<T extends ICommon.SupportMediaType> {
@@ -61,6 +100,11 @@ declare namespace IPlugin {
         data?: IMusic.IMusicSheetGroupItem[];
     }
 
+    /**
+     * 导入歌单结果。新插件返回完整歌单对象；歌曲数组仅用于兼容旧插件。
+     */
+    type IImportMusicSheetResult = IMusic.IMusicSheetItem | IMusic.IMusicItem[];
+
     interface IPluginDefine {
         /** 来源名 */
         platform: string;
@@ -82,6 +126,10 @@ declare namespace IPlugin {
         author?: string;
         /** 插件描述，支持markdown */
         description?: string;
+        /** 支持的音质列表 */
+        supportedQualities?: IMusic.IQualityKey[];
+        /** 插件可请求的 MV/视频质量档位（兼容字符串键与结构化描述） */
+        supportedVideoQualities?: (string | IVideoQualityOption)[];
         /** 用户自定义输入 */
         userVariables?: IUserVariable[];
         /** 提示文本 */
@@ -93,12 +141,25 @@ declare namespace IPlugin {
             musicItem: IMusic.IMusicItemBase,
             quality: IMusic.IQualityKey,
         ) => Promise<IMediaSourceResult | null>;
+        /** 获取歌曲关联的 MV/视频播放源 */
+        getMvSource?: (
+            musicItem: IMusic.IMusicItemBase,
+            videoQuality?: string,
+        ) => Promise<IVideoSourceResult | null>;
         /** 根据主键去查询歌曲信息 */
         getMusicInfo?: (
             musicBase: ICommon.IMediaBase,
         ) => Promise<Partial<IMusic.IMusicItem> | null>;
+        /** 获取音乐详情页 URL，用于分享 */
+        getMusicDetailPageUrl?: (
+            musicItem: IMusic.IMusicItemBase,
+        ) => string | Promise<string | null | undefined> | null | undefined;
         /** 获取歌词 */
         getLyric?: (
+            musicItem: IMusic.IMusicItemBase,
+        ) => Promise<ILyric.ILyricSource | null>;
+        /** 获取逐字歌词 */
+        getWordByWordLyric?: (
             musicItem: IMusic.IMusicItemBase,
         ) => Promise<ILyric.ILyricSource | null>;
         /** 获取专辑信息，里面的歌曲分页 */
@@ -114,10 +175,9 @@ declare namespace IPlugin {
         /** 获取作品，有分页 */
         getArtistWorks?: IGetArtistWorksFunc;
         /** 导入歌单 */
-        // todo: 数据结构应该是IMusicSheetItem
         importMusicSheet?: (
             urlLike: string,
-        ) => Promise<IMusic.IMusicItem[] | null>;
+        ) => Promise<IImportMusicSheetResult | null>;
         /** 导入单曲 */
         importMusicItem?: (
             urlLike: string,
