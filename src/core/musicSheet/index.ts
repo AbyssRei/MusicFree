@@ -8,7 +8,7 @@ import { isSameMediaItem } from "@/utils/mediaUtils";
 import EventEmitter from "eventemitter3";
 import { Immer } from "immer";
 import { atom, getDefaultStore, useAtomValue } from "jotai";
-import { nanoid } from "nanoid";
+import { nanoid } from "@/utils/nanoid";
 import { useEffect, useMemo, useState } from "react";
 import migrate, { migrateV2 } from "./migrate.ts";
 import SortedMusicList from "./sortedMusicList.ts";
@@ -544,7 +544,7 @@ function useSheetItem(sheetId: string) {
             ee.off("UpdateMusicList", onUpdateMusicList);
             ee.off("UpdateSheetBasic", onUpdateSheetBasic);
         };
-    }, []);
+    }, [sheetId]);
 
     return sheetItem;
 }

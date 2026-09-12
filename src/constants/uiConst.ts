@@ -1,19 +1,25 @@
 import { CustomizedColors } from "@/hooks/useColors";
-import rpx from "@/utils/rpx";
+import { fontRpx, fontRpxRound } from "@/utils/rpx";
 
 const fontSizeConst = {
+    /** 辅助标记 */
+    caption: fontRpx(18),
     /** 标签 */
-    tag: rpx(20),
+    tag: fontRpx(20),
     /** 描述文本等字体 */
-    description: rpx(22),
+    description: fontRpx(22),
     /** 副标题 */
-    subTitle: rpx(26),
+    subTitle: fontRpx(26),
     /** 正文字体 */
-    content: rpx(28),
+    content: fontRpx(28),
     /** 标题字体 */
-    title: rpx(32),
+    title: fontRpx(32),
     /** appbar的字体 */
-    appbar: rpx(36),
+    appbar: fontRpx(36),
+    /** 分区标题 */
+    section: fontRpx(40),
+    /** 首页大标题 */
+    hero: fontRpx(54),
 };
 
 const fontWeightConst = {
@@ -25,11 +31,11 @@ const fontWeightConst = {
 } as const;
 
 const iconSizeConst = {
-    small: rpx(30),
-    light: rpx(36),
-    normal: rpx(42),
-    big: rpx(60),
-    large: rpx(72),
+    small: fontRpxRound(30),
+    light: fontRpxRound(36),
+    normal: fontRpxRound(42),
+    big: fontRpxRound(60),
+    large: fontRpxRound(72),
 };
 
 type ColorKey = "normal" | "secondary" | "highlight" | "primary";

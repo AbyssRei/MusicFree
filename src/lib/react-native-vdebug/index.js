@@ -2,28 +2,38 @@
 import PropTypes from 'prop-types';
 import React, {PureComponent} from 'react';
 import {
-    Animated,
+    BackHandler,
     Dimensions,
     Keyboard,
     KeyboardAvoidingView,
     NativeModules,
-    PanResponder,
     Platform,
-    ScrollView,
+    Pressable,
     StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
     View,
+    Alert,
 } from 'react-native';
+import {
+    GestureHandlerRootView,
+    ScrollView,
+} from 'react-native-gesture-handler';
+import Clipboard from '@react-native-clipboard/clipboard';
+import RNFS from 'react-native-fs';
 import event from './src/event';
-// import Network, { traceNetwork } from './src/network';
-import Log, {traceLog} from './src/log';
+import Log, {traceLog, getLogStack} from './src/log';
 import HocComp from './src/hoc';
 import Storage from './src/storage';
 import {replaceReg} from './src/tool';
+import DebugFab from './DebugFab';
+import DebugFloat from '@/native/debugFloat';
 
-const {width, height} = Dimensions.get('window');
+const win = Dimensions.get('window');
+const SCREEN_W = win.width;
+const SCREEN_H = win.height;
+const useNativeFab = DebugFloat.isSupported;
 
 let commandContext = global;
 
@@ -31,15 +41,24 @@ export const setExternalContext = externalContext => {
     if (externalContext) commandContext = externalContext;
 };
 
-// Log/network trace when Element is not initialized.
 export const initTrace = () => {
     traceLog();
-    //   traceNetwork();
 };
 
+/**
+ * Architecture:
+ *
+ * 1) Android FAB = single decorView child (NOT PopupWindow / Dialog window)
+ *    - Same HWUI surface as the activity → no secondary surface EGL crashes
+ *    - Attach once; drag via layout params; bringToFront only
+ *
+ * 2) Log panel = absolute fixed-pixel overlay inside app flex:1 root
+ *    - Does not reflow the music bar
+ *
+ * 3) Do not spam show/hide on panel toggle (causes OEM RenderThread aborts).
+ */
 class VDebug extends PureComponent {
     static propTypes = {
-        // Expansion panel (Optional)
         panels: PropTypes.array,
     };
 
@@ -50,71 +69,89 @@ class VDebug extends PureComponent {
     constructor(props) {
         super(props);
         initTrace();
-        this.containerHeight = (height / 3) * 2;
+        this.containerHeight = Math.floor((SCREEN_H / 3) * 2);
         this.refsObj = {};
         this.state = {
             commandValue: '',
-            showPanel: false,
+            panelOpen: false,
             currentPageIndex: 0,
-            pan: new Animated.ValueXY(),
-            scale: new Animated.Value(1),
-            panelHeight: new Animated.Value(0),
             panels: this.addPanels(),
             history: [],
             historyFilter: [],
             showHistory: false,
+            fabLeft: Math.max(0, SCREEN_W - 72),
+            fabTop: Math.floor(SCREEN_H / 2),
         };
-        this.panResponder = PanResponder.create({
-            onStartShouldSetPanResponder: () => true,
-            onPanResponderGrant: () => {
-                this.state.pan.setOffset({
-                    x: this.state.pan.x._value,
-                    y: this.state.pan.y._value,
-                });
-                this.state.pan.setValue({x: 0, y: 0});
-                Animated.spring(this.state.scale, {
-                    useNativeDriver: true,
-                    toValue: 1.3,
-                    friction: 7,
-                }).start();
-            },
-            onPanResponderMove: Animated.event([
-                null,
-                {dx: this.state.pan.x, dy: this.state.pan.y},
-            ]),
-            onPanResponderRelease: ({nativeEvent}, gestureState) => {
-                if (
-                    Math.abs(gestureState.dx) < 5 &&
-                    Math.abs(gestureState.dy) < 5
-                )
-                    this.togglePanel();
-                setTimeout(() => {
-                    Animated.spring(this.state.scale, {
-                        useNativeDriver: true,
-                        toValue: 1,
-                        friction: 7,
-                    }).start(() => {
-                        this.setState({
-                            top: nativeEvent.pageY,
-                        });
-                    });
-                    this.state.pan.flattenOffset();
-                }, 0);
-            },
-        });
     }
 
     componentDidMount() {
-        this.state.pan.setValue({x: 0, y: 0});
         Storage.support() &&
             Storage.get('react-native-vdebug@history').then(res => {
                 if (res) {
-                    this.setState({
-                        history: res,
-                    });
+                    this.setState({history: res});
                 }
             });
+
+        if (useNativeFab) {
+            this._removeNativePress = DebugFloat.addPressListener(() => {
+                this.togglePanel();
+            });
+            DebugFloat.getPosition().then(pos => {
+                if (pos) {
+                    this.setState({fabLeft: pos.x, fabTop: pos.y});
+                }
+            });
+            // Attach once. Do not spam show()/hide() — that tears surfaces on
+            // some OEMs (EGL_BAD_ACCESS on RenderThread).
+            DebugFloat.show();
+            // Single delayed retry if Activity was not ready at mount.
+            this._showRetryTimer = setTimeout(() => DebugFloat.show(), 600);
+        }
+
+        this._backSub = BackHandler.addEventListener('hardwareBackPress', () => {
+            if (this.state.panelOpen) {
+                this.closePanel();
+                return true;
+            }
+            return false;
+        });
     }
+
+    componentWillUnmount() {
+        if (this._removeNativePress) {
+            this._removeNativePress();
+            this._removeNativePress = null;
+        }
+        if (this._backSub) {
+            this._backSub.remove();
+            this._backSub = null;
+        }
+        if (this._showRetryTimer) {
+            clearTimeout(this._showRetryTimer);
+            this._showRetryTimer = null;
+        }
+        if (useNativeFab) {
+            DebugFloat.hide();
+        }
+    }
+
+    componentDidUpdate(_prevProps, prevState) {
+        if (!useNativeFab) return;
+        if (prevState.panelOpen === this.state.panelOpen) return;
+        // Only raise z-order (no surface recreate). Never hide while panel open.
+        if (this.state.panelOpen) {
+            DebugFloat.bringToFront();
+        }
+    }
+
+    handleFabPositionChange = (left, top) => {
+        const fabLeft = Math.max(0, Math.round(left));
+        const fabTop = Math.max(0, Math.round(top));
+        this.setState({fabLeft, fabTop});
+        if (useNativeFab) {
+            DebugFloat.setPosition(fabLeft, fabTop);
+        }
+    };
 
     getRef(index) {
         return ref => {
@@ -128,14 +165,9 @@ class VDebug extends PureComponent {
                 title: 'Log',
                 component: HocComp(Log, this.getRef(0)),
             },
-            //   {
-            //     title: 'Network',
-            //     component: HocComp(Network, this.getRef(1))
-            //   },
         ];
         if (this.props.panels && this.props.panels.length) {
             this.props.panels.forEach((item, index) => {
-                // support up to five extended panels
                 if (index >= 3) return;
                 if (item.title && item.component) {
                     item.component = HocComp(
@@ -149,11 +181,15 @@ class VDebug extends PureComponent {
         return defaultPanels;
     }
 
-    togglePanel() {
-        this.state.panelHeight.setValue(
-            this.state.panelHeight._value ? 0 : this.containerHeight,
-        );
-    }
+    togglePanel = () => {
+        this.setState(prev => ({panelOpen: !prev.panelOpen}));
+    };
+
+    closePanel = () => {
+        if (this.state.panelOpen) {
+            this.setState({panelOpen: false});
+        }
+    };
 
     clearLogs() {
         const tabName = this.state.panels[this.state.currentPageIndex].title;
@@ -166,6 +202,73 @@ class VDebug extends PureComponent {
 
     reloadDev() {
         NativeModules?.DevMenu?.reload();
+    }
+
+    copyLogs() {
+        try {
+            const logStack = getLogStack();
+            if (!logStack) {
+                Alert.alert('提示', '没有可复制的日志', [{text: '确认'}]);
+                return;
+            }
+            const logs = logStack.getLogs();
+            if (logs.length === 0) {
+                Alert.alert('提示', '没有可复制的日志', [{text: '确认'}]);
+                return;
+            }
+            const logText = logs
+                .map(
+                    log =>
+                        `[${log.time}] [${log.method.toUpperCase()}] ${log.data}`,
+                )
+                .join('\n');
+            Clipboard.setString(logText);
+            Alert.alert('提示', '日志已复制到剪贴板', [{text: '确认'}]);
+        } catch (error) {
+            Alert.alert('错误', '复制日志失败: ' + error.message, [
+                {text: '确认'},
+            ]);
+        }
+    }
+
+    async exportLogs() {
+        try {
+            const logStack = getLogStack();
+            if (!logStack) {
+                Alert.alert('提示', '没有可导出的日志', [{text: '确认'}]);
+                return;
+            }
+            const logs = logStack.getLogs();
+            if (logs.length === 0) {
+                Alert.alert('提示', '没有可导出的日志', [{text: '确认'}]);
+                return;
+            }
+            const logText = logs
+                .map(
+                    log =>
+                        `[${log.time}] [${log.method.toUpperCase()}] ${log.data}`,
+                )
+                .join('\n');
+            const now = new Date();
+            const timestamp =
+                now.getFullYear() +
+                String(now.getMonth() + 1).padStart(2, '0') +
+                String(now.getDate()).padStart(2, '0') +
+                '_' +
+                String(now.getHours()).padStart(2, '0') +
+                String(now.getMinutes()).padStart(2, '0') +
+                String(now.getSeconds()).padStart(2, '0');
+            const fileName = `debug_logs_${timestamp}.txt`;
+            const filePath = RNFS.DownloadDirectoryPath + '/' + fileName;
+            await RNFS.writeFile(filePath, logText, 'utf8');
+            Alert.alert('成功', `日志已导出到下载目录：${fileName}`, [
+                {text: '确认'},
+            ]);
+        } catch (error) {
+            Alert.alert('错误', '导出日志失败: ' + error.message, [
+                {text: '确认'},
+            ]);
+        }
     }
 
     evalInContext(js, context) {
@@ -189,22 +292,18 @@ class VDebug extends PureComponent {
     }
 
     clearCommand() {
-        this.textInput.clear();
-        this.setState({
-            historyFilter: [],
-        });
+        this.textInput && this.textInput.clear();
+        this.setState({historyFilter: []});
     }
 
     scrollToPage(index, animated = true) {
-        this.scrollToCard(index, animated);
-    }
-
-    scrollToCard(cardIndex, animated = true) {
+        let cardIndex = index;
         if (cardIndex < 0) cardIndex = 0;
-        else if (cardIndex >= this.cardCount) cardIndex = this.cardCount - 1;
+        else if (cardIndex >= this.state.panels.length)
+            cardIndex = this.state.panels.length - 1;
         if (this.scrollView) {
             this.scrollView.scrollTo({
-                x: width * cardIndex,
+                x: SCREEN_W * cardIndex,
                 y: 0,
                 animated: animated,
             });
@@ -215,14 +314,12 @@ class VDebug extends PureComponent {
         const item = this.refsObj[this.state.currentPageIndex];
         const instance = item?.getScrollRef && item?.getScrollRef();
         if (instance) {
-            // FlatList
             instance.scrollToOffset &&
                 instance.scrollToOffset({
                     animated: true,
                     viewPosition: 0,
                     index: 0,
                 });
-            // ScrollView
             instance.scrollTo &&
                 instance.scrollTo({x: 0, y: 0, animated: true});
         }
@@ -299,16 +396,18 @@ class VDebug extends PureComponent {
                     height: this.state.historyFilter.length ? 120 : 40,
                     borderWidth: StyleSheet.hairlineWidth,
                     borderColor: '#d9d9d9',
+                    flexShrink: 0,
                 }}>
                 <View
                     style={[
                         styles.historyContainer,
                         {height: this.state.historyFilter.length ? 80 : 0},
                     ]}>
-                    <ScrollView>
-                        {this.state.historyFilter.map(text => {
+                    <ScrollView keyboardShouldPersistTaps="handled">
+                        {this.state.historyFilter.map((text, i) => {
                             return (
                                 <TouchableOpacity
+                                    key={String(i)}
                                     style={{
                                         borderBottomWidth: 1,
                                         borderBottomColor: '#eeeeeea1',
@@ -364,6 +463,16 @@ class VDebug extends PureComponent {
                     style={styles.panelBottomBtn}>
                     <Text style={styles.panelBottomBtnText}>Clear</Text>
                 </TouchableOpacity>
+                <TouchableOpacity
+                    onPress={this.copyLogs.bind(this)}
+                    style={styles.panelBottomBtn}>
+                    <Text style={styles.panelBottomBtnText}>Copy</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    onPress={this.exportLogs.bind(this)}
+                    style={styles.panelBottomBtn}>
+                    <Text style={styles.panelBottomBtnText}>Export</Text>
+                </TouchableOpacity>
                 {__DEV__ && Platform.OS == 'ios' && (
                     <TouchableOpacity
                         onPress={this.showDev.bind(this)}
@@ -373,7 +482,7 @@ class VDebug extends PureComponent {
                     </TouchableOpacity>
                 )}
                 <TouchableOpacity
-                    onPress={this.togglePanel.bind(this)}
+                    onPress={this.togglePanel}
                     style={styles.panelBottomBtn}>
                     <Text style={styles.panelBottomBtnText}>Hide</Text>
                 </TouchableOpacity>
@@ -383,7 +492,7 @@ class VDebug extends PureComponent {
 
     onScrollAnimationEnd({nativeEvent}) {
         const currentPageIndex = Math.floor(
-            nativeEvent.contentOffset.x / Math.floor(width),
+            nativeEvent.contentOffset.x / Math.floor(SCREEN_W),
         );
         currentPageIndex != this.state.currentPageIndex &&
             this.setState({
@@ -391,101 +500,165 @@ class VDebug extends PureComponent {
             });
     }
 
-    renderPanel() {
+    renderPanelBody() {
+        const pageHeight = Math.max(160, this.containerHeight - 120);
         return (
-            <Animated.View
-                style={[styles.panel, {height: this.state.panelHeight}]}>
+            <View style={[styles.panel, {height: this.containerHeight}]}>
                 {this.renderPanelHeader()}
-                <ScrollView
-                    onMomentumScrollEnd={this.onScrollAnimationEnd.bind(this)}
-                    ref={ref => {
-                        this.scrollView = ref;
-                    }}
-                    pagingEnabled={true}
-                    showsHorizontalScrollIndicator={false}
-                    horizontal={true}
-                    style={styles.panelContent}>
-                    {this.state.panels.map((item, index) => {
-                        return (
-                            <View key={index} style={{width: width}}>
+                <View style={{height: pageHeight, width: SCREEN_W}}>
+                    <ScrollView
+                        onMomentumScrollEnd={this.onScrollAnimationEnd.bind(
+                            this,
+                        )}
+                        ref={ref => {
+                            this.scrollView = ref;
+                        }}
+                        pagingEnabled
+                        showsHorizontalScrollIndicator={false}
+                        horizontal
+                        nestedScrollEnabled
+                        keyboardShouldPersistTaps="handled"
+                        style={{width: SCREEN_W, height: pageHeight}}>
+                        {this.state.panels.map((item, index) => (
+                            <View
+                                key={index}
+                                style={{
+                                    width: SCREEN_W,
+                                    height: pageHeight,
+                                }}>
                                 <item.component {...(item.props ?? {})} />
                             </View>
-                        );
-                    })}
-                </ScrollView>
+                        ))}
+                    </ScrollView>
+                </View>
                 {this.renderCommandBar()}
                 {this.renderPanelFooter()}
-            </Animated.View>
-        );
-    }
-
-    renderDebugBtn() {
-        const {pan, scale} = this.state;
-        const [translateX, translateY] = [pan.x, pan.y];
-        const btnStyle = {transform: [{translateX}, {translateY}, {scale}]};
-
-        return (
-            <Animated.View
-                {...this.panResponder.panHandlers}
-                style={[styles.homeBtn, btnStyle]}>
-                <Text style={styles.homeBtnText}>调试</Text>
-            </Animated.View>
+            </View>
         );
     }
 
     render() {
+        const open = this.state.panelOpen;
+
+        // Fixed pixel overlay — never a flex participant of the app column.
         return (
-            <View style={{flex: 1}}>
-                {this.renderPanel()}
-                {this.renderDebugBtn()}
+            <View
+                style={styles.overlayHost}
+                pointerEvents="box-none"
+                collapsable={false}>
+                {open ? (
+                    <View
+                        style={styles.panelLayer}
+                        pointerEvents="box-none"
+                        collapsable={false}>
+                        <Pressable
+                            style={styles.backdrop}
+                            onPress={this.closePanel}
+                            accessibilityLabel="关闭调试面板"
+                        />
+                        <View style={styles.panelDock} collapsable={false}>
+                            <GestureHandlerRootView style={styles.panelGh}>
+                                {this.renderPanelBody()}
+                            </GestureHandlerRootView>
+                        </View>
+                    </View>
+                ) : null}
+
+                {/* iOS only — Android uses PopupWindow FAB */}
+                {!useNativeFab ? (
+                    <DebugFab
+                        onToggle={this.togglePanel}
+                        left={this.state.fabLeft}
+                        top={this.state.fabTop}
+                        onPositionChange={this.handleFabPositionChange}
+                    />
+                ) : null}
             </View>
         );
     }
 }
 
 const styles = StyleSheet.create({
+    // Explicit screen size, not percentage / flex — avoids Yoga reflow bugs
+    // that push the music bar when a tall absolute child mounts.
+    overlayHost: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: SCREEN_W,
+        height: SCREEN_H,
+        backgroundColor: 'transparent',
+        zIndex: 99990,
+        elevation: 0,
+    },
+    panelLayer: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: SCREEN_W,
+        height: SCREEN_H,
+        backgroundColor: 'transparent',
+    },
+    backdrop: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: SCREEN_W,
+        height: SCREEN_H,
+        backgroundColor: 'rgba(0,0,0,0.4)',
+    },
+    // Sheet pinned to bottom with fixed height — not flex:1 growth.
+    panelDock: {
+        position: 'absolute',
+        left: 0,
+        bottom: 0,
+        width: SCREEN_W,
+        height: Math.floor((SCREEN_H / 3) * 2),
+    },
+    panelGh: {
+        flex: 1,
+    },
     activeTab: {
         backgroundColor: '#fff',
     },
     panel: {
-        position: 'absolute',
-        zIndex: 99998,
-        elevation: 99998,
+        width: SCREEN_W,
         backgroundColor: '#fff',
-        width,
-        bottom: 0,
-        right: 0,
+        overflow: 'hidden',
+        flexDirection: 'column',
+        borderTopLeftRadius: 12,
+        borderTopRightRadius: 12,
+        elevation: 8,
     },
     panelHeader: {
-        width,
+        width: SCREEN_W,
         backgroundColor: '#eee',
         flexDirection: 'row',
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: '#d9d9d9',
+        flexShrink: 0,
+        alignItems: 'center',
     },
     panelHeaderItem: {
         flex: 1,
         height: 40,
-        color: '#000',
         borderRightWidth: StyleSheet.hairlineWidth,
         borderColor: '#d9d9d9',
         justifyContent: 'center',
     },
     panelHeaderItemText: {
         textAlign: 'center',
-    },
-    panelContent: {
-        width,
-        flex: 0.9,
+        color: '#000',
     },
     panelBottom: {
-        width,
+        width: SCREEN_W,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: '#d9d9d9',
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: '#eee',
         height: 40,
+        flexShrink: 0,
     },
     panelBottomBtn: {
         flex: 1,
@@ -499,35 +672,12 @@ const styles = StyleSheet.create({
         fontSize: 14,
         textAlign: 'center',
     },
-    panelEmpty: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    homeBtn: {
-        width: 60,
-        paddingVertical: 5,
-        backgroundColor: '#04be02',
-        borderRadius: 4,
-        alignItems: 'center',
-        justifyContent: 'center',
-        position: 'absolute',
-        zIndex: 99999,
-        bottom: height / 2,
-        right: 0,
-        shadowColor: 'rgb(18,34,74)',
-        shadowOffset: {width: 0, height: 1},
-        shadowOpacity: 0.08,
-        elevation: 99999,
-    },
-    homeBtnText: {
-        color: '#fff',
-    },
     commandBar: {
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: '#d9d9d9',
         flexDirection: 'row',
         height: 40,
+        flexShrink: 0,
     },
     commandBarInput: {
         flex: 1,

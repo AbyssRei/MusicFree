@@ -1,4 +1,5 @@
 import pathConst from "@/constants/pathConst";
+import { devLog } from "@/utils/log";
 import FastImage from "react-native-fast-image";
 import RNFS, {
     PicturesDirectoryPath,
@@ -30,7 +31,7 @@ export async function saveToGallery(src: string) {
         try {
             await copyFile(src, fileName);
         } catch (e) {
-            console.log("... ", e);
+            devLog("warn", "📁[文件工具] 文件复制失败", { src, fileName, error: e });
         }
     }
     if (src.startsWith("http")) {
@@ -126,6 +127,13 @@ export function addFileScheme(fileName: string) {
     return fileName;
 }
 
+export function removeFileScheme(filePath: string) {
+    if (filePath.startsWith("file://")) {
+        return filePath.slice(7);
+    }
+    return filePath;
+}
+
 export function addRandomHash(url: string) {
     if (url.indexOf("#") === -1) {
         return `${url}#${Date.now()}`;
@@ -191,7 +199,7 @@ export async function mkdirR(directory: string) {
         try {
             await mkdir(checkStack[j]);
         } catch (e) {
-            console.log("error", e);
+            devLog("warn", "📁[文件工具] 文件处理异常", { error: e });
         }
     }
 }

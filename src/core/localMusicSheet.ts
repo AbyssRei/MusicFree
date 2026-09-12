@@ -3,8 +3,13 @@ import {
     internalSerializeKey,
     supportLocalMediaType,
 } from "@/constants/commonConst";
-import mp3Util, { IBasicMeta } from "@/native/mp3Util";
-import { addFileScheme, getFileName } from "@/utils/fileUtils.ts";
+import pathConst from "@/constants/pathConst";
+import mp3Util from "@/native/mp3Util";
+import {
+    addFileScheme,
+    getFileName,
+    removeFileScheme,
+} from "@/utils/fileUtils.ts";
 import {
     getLocalPath,
     isSameMediaItem,
@@ -12,24 +17,153 @@ import {
 import StateMapper from "@/utils/stateMapper";
 import { getStorage, setStorage } from "@/utils/storage";
 import CryptoJs from "crypto-js";
-import { nanoid } from "nanoid";
+import { nanoid } from "@/utils/nanoid";
 import { useEffect, useState } from "react";
+import { Platform } from "react-native";
 import { ReadDirItem, exists, readDir, unlink } from "react-native-fs";
 
 let localSheet: IMusic.IMusicItem[] = [];
 const localSheetStateMapper = new StateMapper(() => localSheet);
 
+const iosDocumentsMarker = "/Documents/";
+const artworkHydrateGroupNum = 8;
+let artworkHydrateToken = 0;
+
+function getLocalPathCandidates(localPath: string) {
+    const rawPath = removeFileScheme(localPath);
+    const candidates = [rawPath];
+
+    if (Platform.OS === "ios") {
+        const documentIndex = rawPath.indexOf(iosDocumentsMarker);
+        if (documentIndex !== -1) {
+            const relativePath = rawPath.slice(
+                documentIndex + iosDocumentsMarker.length,
+            );
+            candidates.push(`${pathConst.basePath}/${relativePath}`);
+        }
+    }
+
+    return [...new Set(candidates)];
+}
+
+async function getExistingLocalPath(localPath: string) {
+    const candidates = getLocalPathCandidates(localPath);
+    for (let candidate of candidates) {
+        if (await exists(candidate)) {
+            return candidate;
+        }
+    }
+    return null;
+}
+
+function isFileNotFoundError(error: any) {
+    const message = `${error?.message ?? error}`.toLowerCase();
+    return (
+        message.includes("enoent") ||
+        message.includes("no such file or directory") ||
+        message.includes("file does not exist")
+    );
+}
+
+function hasArtwork(musicItem: IMusic.IMusicItem) {
+    return (
+        typeof musicItem.artwork === "string" &&
+        musicItem.artwork.trim().length > 0
+    );
+}
+
+async function hydrateLocalArtwork(musicItems: IMusic.IMusicItem[] = localSheet) {
+    const token = ++artworkHydrateToken;
+    const candidates = musicItems.filter(
+        musicItem => !hasArtwork(musicItem) && !!getLocalPath(musicItem),
+    );
+
+    for (let i = 0; i < candidates.length; i += artworkHydrateGroupNum) {
+        if (token !== artworkHydrateToken) {
+            return;
+        }
+
+        const group = candidates.slice(i, i + artworkHydrateGroupNum);
+        const hydratedGroup = await Promise.all(
+            group.map(async musicItem => {
+                const localPath = getLocalPath(musicItem);
+                if (!localPath) {
+                    return null;
+                }
+
+                try {
+                    const artwork = await mp3Util.getMediaCoverImg(
+                        removeFileScheme(localPath),
+                    );
+                    return typeof artwork === "string" && artwork.trim()
+                        ? { musicItem, artwork }
+                        : null;
+                } catch {
+                    return null;
+                }
+            }),
+        );
+
+        if (token !== artworkHydrateToken) {
+            return;
+        }
+
+        let nextSheet = localSheet;
+        let hasChanged = false;
+        hydratedGroup.forEach(hydrated => {
+            if (!hydrated) {
+                return;
+            }
+            const targetIndex = nextSheet.findIndex(musicItem =>
+                isSameMediaItem(musicItem, hydrated.musicItem),
+            );
+            if (targetIndex === -1 || hasArtwork(nextSheet[targetIndex])) {
+                return;
+            }
+            if (!hasChanged) {
+                nextSheet = [...localSheet];
+                hasChanged = true;
+            }
+            nextSheet[targetIndex] = {
+                ...nextSheet[targetIndex],
+                artwork: hydrated.artwork,
+            };
+        });
+
+        if (hasChanged) {
+            localSheet = nextSheet;
+            localSheetStateMapper.notify();
+            await saveLocalSheet();
+        }
+    }
+}
+
 export async function setup() {
     const sheet = await getStorage(StorageKeys.LocalMusicSheet);
     if (sheet) {
         let validSheet: IMusic.IMusicItem[] = [];
+        let hasChanged = false;
         for (let musicItem of sheet) {
             const localPath = getLocalPath(musicItem);
-            if (localPath && (await exists(localPath))) {
-                validSheet.push(musicItem);
+            if (localPath) {
+                const existingPath = await getExistingLocalPath(localPath);
+                if (existingPath) {
+                    hasChanged = hasChanged || existingPath !== removeFileScheme(localPath);
+                    validSheet.push({
+                        ...musicItem,
+                        [internalSerializeKey]: {
+                            ...(musicItem[internalSerializeKey] ?? {}),
+                            localPath: existingPath,
+                        },
+                    });
+                } else {
+                    hasChanged = true;
+                }
+            } else {
+                hasChanged = true;
             }
         }
-        if (validSheet.length !== sheet.length) {
+        if (hasChanged) {
             await setStorage(StorageKeys.LocalMusicSheet, validSheet);
         }
         localSheet = validSheet;
@@ -54,6 +188,7 @@ export async function addMusic(
     await setStorage(StorageKeys.LocalMusicSheet, newSheet);
     localSheet = newSheet;
     localSheetStateMapper.notify();
+    void hydrateLocalArtwork(musicItem);
 }
 
 function addMusicDraft(musicItem: IMusic.IMusicItem | IMusic.IMusicItem[]) {
@@ -84,13 +219,16 @@ export async function removeMusic(
         const localMusicItem = localSheet[idx];
         newSheet.splice(idx, 1);
         const localPath =
-            musicItem[internalSerializeKey]?.localPath ??
-            localMusicItem[internalSerializeKey]?.localPath;
+            getLocalPath(localMusicItem) ??
+            getLocalPath(musicItem);
         if (deleteOriginalFile && localPath) {
             try {
-                await unlink(localPath);
+                const existingPath = await getExistingLocalPath(localPath);
+                if (existingPath) {
+                    await unlink(existingPath);
+                }
             } catch (e: any) {
-                if (e.message !== "File does not exist") {
+                if (!isFileNotFoundError(e)) {
                     throw e;
                 }
             }
@@ -163,7 +301,7 @@ async function importLocal(_folderPaths: string[]) {
         throw new Error("Import Broken");
     }
     // 分组请求，不然序列化可能出问题
-    let metas: IBasicMeta[] = [];
+    let metas: any[] = [];
     const groups = Math.ceil(musicList.length / groupNum);
     for (let i = 0; i < groups; ++i) {
         metas = metas.concat(
@@ -201,7 +339,7 @@ async function importLocal(_folderPaths: string[]) {
     if (token !== importToken) {
         throw new Error("Import Broken");
     }
-    addMusic(musicItems);
+    await addMusic(musicItems);
 }
 
 /** 是否为本地音乐 */
@@ -237,6 +375,7 @@ async function updateMusicList(newSheet: IMusic.IMusicItem[]) {
         await setStorage(StorageKeys.LocalMusicSheet, _localSheet);
         localSheet = _localSheet;
         localSheetStateMapper.notify();
+        void hydrateLocalArtwork(_localSheet);
     } catch {}
 }
 
@@ -251,6 +390,7 @@ const LocalMusicSheet = {
     isLocalMusic,
     useIsLocal,
     getMusicList,
+    hydrateArtwork: hydrateLocalArtwork,
     useMusicList: localSheetStateMapper.useMappedState,
     updateMusicList,
 };

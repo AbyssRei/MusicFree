@@ -6,6 +6,7 @@ import { emptyFunction, localPluginHash, supportLocalMediaType } from "@/constan
 import pathConst from "@/constants/pathConst";
 import Config from "@/core/appConfig";
 import downloader, { DownloadFailReason, DownloaderEvent } from "@/core/downloader";
+import downloadNotificationManager from "@/core/downloadNotificationManager";
 import LocalMusicSheet from "@/core/localMusicSheet";
 import lyricManager from "@/core/lyricManager";
 import musicHistory from "@/core/musicHistory";
@@ -15,18 +16,32 @@ import Theme from "@/core/theme";
 import TrackPlayer from "@/core/trackPlayer";
 import NativeUtils from "@/native/utils";
 import { checkAndCreateDir } from "@/utils/fileUtils";
-import { errorLog, trace } from "@/utils/log";
+import { appendStartupBreadcrumb, errorLog, markStartupSession, trace, devLog } from "@/utils/log";
 import { IPerfLogger, perfLogger } from "@/utils/perfLogger";
 import PersistStatus from "@/utils/persistStatus";
 import Toast from "@/utils/toast";
 import * as SplashScreen from "expo-splash-screen";
 import {  Linking, Platform } from "react-native";
+import NetInfo from "@react-native-community/netinfo";
 import { PERMISSIONS, check, request } from "react-native-permissions";
 import RNTrackPlayer, { AppKilledPlaybackBehavior, Capability } from "react-native-track-player";
 import i18n from "@/core/i18n";
 import bootstrapAtom from "./bootstrap.atom";
 import { getDefaultStore } from "jotai";
+import announcementService from "@/services/announcementService";
 
+// Request this at module load, before the first React commit. Calling it only
+// after the async bootstrap starts can let Expo auto-hide the native splash
+// before the persisted light/custom theme is ready.
+const splashScreenPreventPromise = SplashScreen.preventAutoHideAsync()
+    .then(result => {
+        devLog("info", "✅[Bootstrap] SplashScreen防自动隐藏成功", { result });
+        return result;
+    })
+    .catch(error => {
+        devLog("warn", "⚠️[Bootstrap] SplashScreen防自动隐藏失败", error);
+        return false;
+    });
 
 // 依赖管理
 PluginManager.injectDependencies(Config);
@@ -36,46 +51,70 @@ downloader.injectDependencies(Config, PluginManager);
 lyricManager.injectDependencies(TrackPlayer, Config, PluginManager);
 MusicSheet.injectDependencies(Config);
 
+devLog("info", "🚀[Bootstrap] 所有依赖注入完成");
+
+function registerEarlyGlobalErrorHandlers() {
+    try {
+        ErrorUtils.setGlobalHandler((error, isFatal) => {
+            void appendStartupBreadcrumb("global-error", {
+                isFatal,
+                message: error?.message,
+                name: error?.name,
+            });
+            errorLog("未捕获的错误", {
+                isFatal,
+                message: error?.message,
+                stack: error?.stack,
+                name: error?.name,
+            });
+        });
+    } catch {
+    }
+}
+
 
 async function bootstrapImpl() {
-    await SplashScreen.preventAutoHideAsync()
-        .then(result =>
-            console.log(
-                `SplashScreen.preventAutoHideAsync() succeeded: ${result}`,
-            ),
-        )
-        .catch(console.warn); // it's good to explicitly catch and inspect any error
+    await appendStartupBreadcrumb("bootstrap-start");
+    registerEarlyGlobalErrorHandlers();
+    await appendStartupBreadcrumb("global-handler-registered");
+
+    await splashScreenPreventPromise;
+    await appendStartupBreadcrumb("splashscreen-prevented");
     const logger = perfLogger();
     // 1. 检查权限
-    if (Platform.OS === "android" && Platform.Version >= 30) {
-        const hasPermission = await NativeUtils.checkStoragePermission();
-        if (
-            !hasPermission &&
-            !PersistStatus.get("app.skipBootstrapStorageDialog")
-        ) {
-            showDialog("CheckStorage");
-        }
-    } else {
-        const [readStoragePermission, writeStoragePermission] =
-            await Promise.all([
-                check(PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE),
-                check(PERMISSIONS.ANDROID.WRITE_EXTERNAL_STORAGE),
-            ]);
-        if (
-            !(
-                readStoragePermission === "granted" &&
-                writeStoragePermission === "granted"
-            )
-        ) {
-            await request(PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE);
-            await request(PERMISSIONS.ANDROID.WRITE_EXTERNAL_STORAGE);
+    if (Platform.OS === "android") {
+        if (Platform.Version >= 30) {
+            const hasPermission = await NativeUtils.checkStoragePermission();
+            if (
+                !hasPermission &&
+                !PersistStatus.get("app.skipBootstrapStorageDialog")
+            ) {
+                showDialog("CheckStorage");
+            }
+        } else {
+            const [readStoragePermission, writeStoragePermission] =
+                await Promise.all([
+                    check(PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE),
+                    check(PERMISSIONS.ANDROID.WRITE_EXTERNAL_STORAGE),
+                ]);
+            if (
+                !(
+                    readStoragePermission === "granted" &&
+                    writeStoragePermission === "granted"
+                )
+            ) {
+                await request(PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE);
+                await request(PERMISSIONS.ANDROID.WRITE_EXTERNAL_STORAGE);
+            }
         }
     }
+    await appendStartupBreadcrumb("permissions-checked", { platform: Platform.OS });
     logger.mark("权限检查完成");
 
     // 2. 数据初始化
     /** 初始化路径 */
     await setupFolder();
+    await appendStartupBreadcrumb("folders-ready");
     trace("文件夹初始化完成");
     logger.mark("文件夹初始化完成");
 
@@ -93,16 +132,40 @@ async function bootstrapImpl() {
             logger.mark("musicHistory");
         }),
     ]);
+    await appendStartupBreadcrumb("config-loaded");
     trace("配置初始化完成");
     logger.mark("配置初始化完成");
 
-    // 加载插件
+    // 检查用户协议
+    if (!Config.getConfig("common.isAgreePact")) {
+        devLog("info", "📜[Bootstrap] 用户尚未同意协议，显示许可协议");
+        showDialog("PactDialog");
+    }
+    logger.mark("协议检查完成");
+
+    // Theme + i18n before heavy media work so first paint tokens are ready.
+    Theme.setup();
+    logger.mark("主题初始化完成");
+    i18n.setup();
+    await appendStartupBreadcrumb("i18n-ready");
+    logger.mark("语言模块初始化完成");
+
+    // 加载插件（默认懒加载：有缓存时不编译沙箱，启动显著更快）
     await PluginManager.setup();
+    await appendStartupBreadcrumb("plugins-ready");
     logger.mark("插件初始化完成");
     trace("插件初始化完成");
 
-    await initTrackPlayer(logger).catch(err => {
-        // 初始化播放器出错，延迟初始化
+    await appendStartupBreadcrumb("trackplayer-init-start");
+    try {
+        await initTrackPlayer(logger);
+        await appendStartupBreadcrumb("trackplayer-init-finished");
+    } catch (err: any) {
+        await appendStartupBreadcrumb("trackplayer-setup-error", {
+            message: err?.message,
+            name: err?.name,
+        });
+        // Initialize player later if startup restore fails.
         const bootstrapState = getDefaultStore().get(bootstrapAtom);
 
         if (bootstrapState.state === "Loading") {
@@ -111,24 +174,157 @@ async function bootstrapImpl() {
                 reason: err,
             });
         }
+    }
+
+    // Non-critical work must NOT block splash hide:
+    // local scan, download notifications, plugin auto-update, announcements.
+    void schedulePostBootstrapWork(logger).catch((error: any) => {
+        void appendStartupBreadcrumb("post-bootstrap-error", {
+            message: error?.message,
+            name: error?.name,
+        });
+        errorLog("post-bootstrap work failed", error);
+    });
+    await appendStartupBreadcrumb("post-bootstrap-scheduled");
+
+    await appendStartupBreadcrumb("bootstrap-impl-finished");
+}
+
+/**
+ * Work that used to block cold start (local file validation, network wait for
+ * announcements, download channel setup). Runs after critical path so splash
+ * can hide ASAP.
+ */
+async function schedulePostBootstrapWork(logger: IPerfLogger) {
+    // Yield once so bootstrap Done / SplashScreen.hide can run first.
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+    try {
+        await LocalMusicSheet.setup();
+        trace("本地音乐初始化完成");
+        logger.mark("本地音乐初始化完成");
+        await appendStartupBreadcrumb("local-music-ready");
+    } catch (error: any) {
+        await appendStartupBreadcrumb("local-music-error", {
+            message: error?.message,
+            name: error?.name,
+        });
+        errorLog("local music setup failed", error);
+    }
+
+    try {
+        await downloadNotificationManager.initialize();
+        await appendStartupBreadcrumb("download-notification-ready");
+        logger.mark("下载通知管理器初始化完成");
+    } catch (error: any) {
+        await appendStartupBreadcrumb("download-notification-error", {
+            message: error?.message,
+            name: error?.name,
+        });
+        errorLog(
+            "Failed to initialize download notification manager",
+            error,
+        );
+    }
+
+    void extraMakeup().catch((error: any) => {
+        void appendStartupBreadcrumb("extra-makeup-error", {
+            message: error?.message,
+            name: error?.name,
+        });
+        errorLog("extra makeup failed", error);
     });
 
-    await LocalMusicSheet.setup();
-    trace("本地音乐初始化完成");
-    logger.mark("本地音乐初始化完成");
-
-    Theme.setup();
-    trace("主题初始化完成");
-    logger.mark("主题初始化完成");
-
-    extraMakeup();
-
-    i18n.setup();
-    logger.mark("语言模块初始化完成");
-    
-    ErrorUtils.setGlobalHandler(error => {
-        errorLog("未捕获的错误", error);
+    // Announcements: do not wait up to 7s for network on the critical path.
+    void checkAnnouncementsInBackground().catch((error: any) => {
+        devLog("warn", "⚠️[Bootstrap] 公告检查失败", error);
     });
+}
+
+function showAnnouncementSafely(
+    announcement: IAnnouncement.IAnnouncementItem,
+) {
+    const tryShow = () => {
+        const current = getCurrentDialog();
+        if (!current?.name) {
+            showDialog("AnnouncementDialog", { announcement });
+            return true;
+        }
+        return false;
+    };
+
+    if (tryShow()) {
+        return;
+    }
+    let attempts = 0;
+    const maxAttempts = 40; // ~20s
+    const timer = setInterval(() => {
+        attempts += 1;
+        if (tryShow() || attempts >= maxAttempts) {
+            clearInterval(timer);
+        }
+    }, 500);
+}
+
+async function waitForConnectivity(timeoutMs = 5000) {
+    try {
+        const first = await NetInfo.fetch();
+        if (first.isConnected && (first.isInternetReachable ?? true)) {
+            return;
+        }
+    } catch {
+        // ignore
+    }
+    await new Promise<void>(resolve => {
+        let resolved = false;
+        let unsubscribe: (() => void) | undefined;
+        const timer = setTimeout(() => {
+            if (!resolved) {
+                resolved = true;
+                unsubscribe?.();
+                resolve();
+            }
+        }, timeoutMs);
+        unsubscribe = NetInfo.addEventListener(state => {
+            if (
+                !resolved &&
+                state.isConnected &&
+                (state.isInternetReachable ?? true)
+            ) {
+                resolved = true;
+                clearTimeout(timer);
+                unsubscribe?.();
+                resolve();
+            }
+        });
+    });
+}
+
+async function checkAnnouncementsInBackground() {
+    devLog("info", "📢[Bootstrap] 后台检查在线公告", {
+        platform: Platform.OS,
+    });
+    await waitForConnectivity(5000);
+    const announcement = await announcementService.checkAnnouncements();
+    if (announcement) {
+        setTimeout(() => {
+            showAnnouncementSafely(announcement);
+        }, 1500);
+    } else {
+        setTimeout(async () => {
+            try {
+                const retryAnnouncement =
+                    await announcementService.checkAnnouncements(true);
+                if (retryAnnouncement) {
+                    showAnnouncementSafely(retryAnnouncement);
+                    devLog("info", "✅[Bootstrap] 二次公告检查命中");
+                }
+            } catch (e) {
+                devLog("warn", "⚠️[Bootstrap] 二次公告检查失败", e);
+            }
+        }, 8000);
+    }
+    devLog("info", "✅[Bootstrap] 公告检查完成");
 }
 
 /** 初始化 */
@@ -179,7 +375,8 @@ export async function initTrackPlayer(logger?: IPerfLogger) {
         ];
     await RNTrackPlayer.updateOptions({
         icon: ImgAsset.logoTransparent,
-        progressUpdateEventInterval: 1,
+        // Frequent updates for smooth word-by-word lyric animation (100ms interval)
+        progressUpdateEventInterval: 0.1,
         android: {
             alwaysPauseOnInterruption: true,
             appKilledPlaybackBehavior:
@@ -212,6 +409,10 @@ async function extraMakeup() {
             if (Math.abs(now - lastUpdated) > 86400000) {
                 PersistStatus.set("app.pluginUpdateTime", now);
                 const plugins = PluginManager.getEnabledPlugins();
+                devLog("info", "🔄[Bootstrap] 插件自动更新", {
+                    platform: Platform.OS,
+                    count: plugins.length,
+                });
                 for (let i = 0; i < plugins.length; ++i) {
                     const srcUrl = plugins[i].instance.srcUrl;
                     if (srcUrl) {
@@ -251,7 +452,7 @@ async function extraMakeup() {
                         }
                     })
                     .catch(e => {
-                        console.log(e);
+                        devLog("warn", "⚠️[Bootstrap] 插件安装失败", e);
                         Toast.warn(e?.message ?? "无法识别此插件");
                     });
             } else if (supportLocalMediaType.some(it => url.endsWith(it))) {
@@ -259,7 +460,7 @@ async function extraMakeup() {
                 const musicItem = await PluginManager.getByHash(
                     localPluginHash,
                 )?.instance?.importMusicItem?.(url);
-                console.log(musicItem);
+                devLog("info", "🎵[Bootstrap] 导入本地音乐项目", musicItem);
                 if (musicItem) {
                     TrackPlayer.play(musicItem);
                 }
@@ -299,22 +500,34 @@ function bindEvents() {
         }
     });
 
-    downloader.on(DownloaderEvent.DownloadQueueCompleted, () => {
-        Toast.success("下载任务已完成");
+    downloader.on(DownloaderEvent.DownloadQueueCompleted, (errorCount) => {
+        if (errorCount > 0) {
+            Toast.warn(`下载队列结束，${errorCount} 个任务失败`);
+        } else {
+            Toast.success("下载任务已完成");
+        }
     });
 }
 
 export default async function () {
+    await markStartupSession("bootstrap-entry");
+
     try {
         getDefaultStore().set(bootstrapAtom, {
             "state": "Loading",
         });
         await bootstrapImpl();
         bindEvents();
+        await appendStartupBreadcrumb("bootstrap-bind-events");
         getDefaultStore().set(bootstrapAtom, {
             "state": "Done",
         });
+        await appendStartupBreadcrumb("bootstrap-done");
     } catch (e: any) {
+        await appendStartupBreadcrumb("bootstrap-fatal", {
+            message: e?.message,
+            name: e?.name,
+        });
         errorLog("初始化出错", e);
         if (getDefaultStore().get(bootstrapAtom).state === "Loading") {
             getDefaultStore().set(bootstrapAtom, {
@@ -324,6 +537,7 @@ export default async function () {
         }
     }
     // 隐藏开屏动画
-    console.log("HIDE");
+    devLog("info", "🎯[Bootstrap] 隐藏启动屏幕");
+    await appendStartupBreadcrumb("splashscreen-hide");
     await SplashScreen.hideAsync();
 }

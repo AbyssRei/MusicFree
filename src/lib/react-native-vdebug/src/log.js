@@ -1,7 +1,6 @@
 import React, {Component} from 'react';
 import {
     Alert,
-    FlatList,
     StyleSheet,
     Text,
     TextInput,
@@ -9,6 +8,10 @@ import {
     TouchableWithoutFeedback,
     View,
 } from 'react-native';
+// GH FlatList participates correctly under GestureHandlerRootView and
+// wins vertical scroll against song-list pages beneath the debug overlay.
+import {FlatList} from 'react-native-gesture-handler';
+import Clipboard from '@react-native-clipboard/clipboard';
 import event from './event';
 import {debounce} from './tool';
 
@@ -205,8 +208,12 @@ class Log extends Component {
             <TouchableWithoutFeedback
                 onLongPress={() => {
                     try {
+                        const logText = `[${item.time}] [${item.method.toUpperCase()}] ${item.data}`;
+                        Clipboard.setString(logText);
                         Alert.alert('提示', '复制成功', [{text: '确认'}]);
-                    } catch (error) {}
+                    } catch (error) {
+                        Alert.alert('错误', '复制失败: ' + error.message, [{text: '确认'}]);
+                    }
                 }}>
                 <View style={styles.logItem}>
                     <View style={{flexDirection: 'row'}}>
@@ -236,8 +243,12 @@ class Log extends Component {
                 ref={ref => {
                     this.flatList = ref;
                 }}
-                legacyImplementation
-                // initialNumToRender={20}
+                style={styles.list}
+                contentContainerStyle={
+                    this.state.logs?.length ? undefined : styles.listEmptyContent
+                }
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator
                 extraData={this.state}
                 data={this.state.logs}
@@ -252,6 +263,14 @@ class Log extends Component {
 }
 
 const styles = StyleSheet.create({
+    list: {
+        flex: 1,
+        minHeight: 0,
+        backgroundColor: '#fff',
+    },
+    listEmptyContent: {
+        flexGrow: 1,
+    },
     log: {
         color: '#000',
     },
@@ -366,4 +385,8 @@ export const traceLog = () => {
 
 export const addLog = (level, ...args) => {
     logStack.addLog(level, args);
+};
+
+export const getLogStack = () => {
+    return logStack;
 };

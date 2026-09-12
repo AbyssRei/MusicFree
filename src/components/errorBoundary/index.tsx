@@ -1,11 +1,13 @@
 import React, { Component, ReactNode, useEffect, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, Image, Platform } from "react-native";
 import DeviceInfo from "react-native-device-info";
-import useColors from "@/hooks/useColors";
-import rpx from "@/utils/rpx";
-import LinkText from "@/components/base/linkText";
+import Theme from "@/core/theme";
+import type { CustomizedColors } from "@/hooks/useColors";
+import rpx, { fontRpx } from "@/utils/rpx";
 import { ImgAsset } from "@/constants/assetsConst";
-import ThemeText from "@/components/base/themeText";
+import { fontSizeConst, fontWeightConst } from "@/constants/uiConst";
+import openUrl from "@/utils/openUrl";
+import { devLog } from "@/utils/log";
 
 interface DeviceInfoProps {
     colors: any;
@@ -47,34 +49,59 @@ function DeviceInfoSection({ colors }: DeviceInfoProps) {
                     deviceBrand: brand,
                 });
             } catch (error) {
-                console.warn("获取设备信息失败:", error);
+                devLog("warn", "📱[错误边界] 获取设备信息失败", error);
             }
         };
 
         getDeviceInfo();
     }, []);    const systemDisplayName = Platform.OS === "ios" ? "iOS" : "Android";
 
+    const text = colors?.text ?? "#F5F2EB";
+    const textSecondary = colors?.textSecondary ?? "rgba(245,242,235,0.64)";
+    const card = colors?.card ?? "#192028";
+    const divider = colors?.divider ?? "rgba(245,242,235,0.11)";
+
     return (
-        <View style={[styles.deviceInfoBox, { backgroundColor: colors.card, borderColor: colors.divider }]}>
-            <ThemeText 
-                fontSize="subTitle" 
-                fontWeight="bold" 
-                style={[styles.deviceInfoTitle, { color: colors.text }]}
-            >
+        <View
+            style={[
+                styles.deviceInfoBox,
+                { backgroundColor: card, borderColor: divider },
+            ]}>
+            <Text
+                style={[
+                    styles.deviceInfoTitle,
+                    {
+                        color: text,
+                        fontSize: fontSizeConst.subTitle,
+                        fontWeight: fontWeightConst.bold,
+                    },
+                ]}>
                 📱 设备信息
-            </ThemeText>
+            </Text>
             <View style={styles.deviceInfoList}>
                 <View style={styles.deviceInfoRow}>
-                    <Text style={[styles.deviceInfoLabel, { color: colors.textSecondary }]}>应用版本:</Text>
-                    <Text style={[styles.deviceInfoValue, { color: colors.text }]}>{deviceInfo.appVersion} ({deviceInfo.buildNumber})</Text>
+                    <Text style={[styles.deviceInfoLabel, { color: textSecondary }]}>
+                        应用版本:
+                    </Text>
+                    <Text style={[styles.deviceInfoValue, { color: text }]}>
+                        {deviceInfo.appVersion} ({deviceInfo.buildNumber})
+                    </Text>
                 </View>
                 <View style={styles.deviceInfoRow}>
-                    <Text style={[styles.deviceInfoLabel, { color: colors.textSecondary }]}>系统版本:</Text>
-                    <Text style={[styles.deviceInfoValue, { color: colors.text }]}>{systemDisplayName} {deviceInfo.systemVersion}</Text>
+                    <Text style={[styles.deviceInfoLabel, { color: textSecondary }]}>
+                        系统版本:
+                    </Text>
+                    <Text style={[styles.deviceInfoValue, { color: text }]}>
+                        {systemDisplayName} {deviceInfo.systemVersion}
+                    </Text>
                 </View>
                 <View style={styles.deviceInfoRow}>
-                    <Text style={[styles.deviceInfoLabel, { color: colors.textSecondary }]}>设备型号:</Text>
-                    <Text style={[styles.deviceInfoValue, { color: colors.text }]}>{deviceInfo.deviceBrand} {deviceInfo.deviceModel}</Text>
+                    <Text style={[styles.deviceInfoLabel, { color: textSecondary }]}>
+                        设备型号:
+                    </Text>
+                    <Text style={[styles.deviceInfoValue, { color: text }]}>
+                        {deviceInfo.deviceBrand} {deviceInfo.deviceModel}
+                    </Text>
                 </View>
             </View>
         </View>
@@ -115,7 +142,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
         });
         
         // 这里可以添加错误日志上报
-        console.error("ErrorBoundary caught an error:", error, errorInfo);
+        devLog("error", "🛑[错误边界] 捕获到应用错误", { error: error.message, errorInfo });
     }
 
     render() {
@@ -133,132 +160,193 @@ interface ErrorFallbackProps {
 }
 
 function ErrorFallback({ error, errorInfo }: ErrorFallbackProps) {
-    const colors = useColors();
+    // Use app Theme store — NOT react-navigation useTheme / useColors —
+    // so this screen still works if NavigationContainer is unmounted.
+    const theme = Theme.useTheme();
+    const colors = (theme.colors ?? {}) as CustomizedColors;
+    const text = colors.text ?? "#F5F2EB";
+    const textSecondary = colors.textSecondary ?? "rgba(245,242,235,0.64)";
+    const card = colors.card ?? "#192028";
+    const divider = colors.divider ?? "rgba(245,242,235,0.11)";
+    const background =
+        colors.pageBackground ?? colors.background ?? "#101419";
 
     return (
-        <View style={[styles.container, { backgroundColor: colors.background }]}>
-            <ScrollView 
+        <View style={[styles.container, { backgroundColor: background }]}>
+            <ScrollView
                 style={styles.scrollView}
                 contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
-            >
-                {/* 错误标题 */}
+                showsVerticalScrollIndicator={false}>
                 <View style={styles.header}>
-                    <ThemeText 
-                        fontSize="title" 
-                        fontWeight="bold" 
-                        style={[styles.title, { color: colors.text }]}
-                    >
+                    <Text
+                        style={[
+                            styles.title,
+                            {
+                                color: text,
+                                fontSize: fontSizeConst.title,
+                                fontWeight: fontWeightConst.bold,
+                            },
+                        ]}>
                         🙈 哎呀，程序崩了...
-                    </ThemeText>
+                    </Text>
                 </View>
 
-                {/* 设备信息 */}
                 <DeviceInfoSection colors={colors} />
 
-                {/* 错误详情 */}
-                <View style={[styles.errorBox, { backgroundColor: colors.card, borderColor: colors.divider }]}>
-                    <ThemeText 
-                        fontSize="subTitle" 
-                        fontWeight="bold" 
-                        style={[styles.errorTitle, { color: colors.text }]}
-                    >
+                <View
+                    style={[
+                        styles.errorBox,
+                        { backgroundColor: card, borderColor: divider },
+                    ]}>
+                    <Text
+                        style={[
+                            styles.errorTitle,
+                            {
+                                color: text,
+                                fontSize: fontSizeConst.subTitle,
+                                fontWeight: fontWeightConst.bold,
+                            },
+                        ]}>
                         🐛 错误详情
-                    </ThemeText>
-                    <Text style={[styles.errorText, { color: colors.textSecondary }]}>
+                    </Text>
+                    <Text style={[styles.errorText, { color: textSecondary }]}>
                         {error?.message || "未知错误"}
                     </Text>
-                    {error?.stack && (
-                        <ScrollView 
+                    {error?.stack ? (
+                        <ScrollView
                             style={styles.stackContainer}
-                            showsVerticalScrollIndicator={true}
-                            nestedScrollEnabled={true}
-                        >
-                            <Text style={[styles.stackText, { color: colors.textSecondary }]}>
+                            showsVerticalScrollIndicator
+                            nestedScrollEnabled>
+                            <Text
+                                style={[
+                                    styles.stackText,
+                                    { color: textSecondary },
+                                ]}>
                                 {error.stack}
                             </Text>
                         </ScrollView>
-                    )}
+                    ) : null}
                 </View>
 
-                {/* 组件堆栈信息 */}
-                {errorInfo?.componentStack && (
-                    <View style={[styles.errorBox, { backgroundColor: colors.card, borderColor: colors.divider }]}>
-                        <ThemeText 
-                            fontSize="subTitle" 
-                            fontWeight="bold" 
-                            style={[styles.errorTitle, { color: colors.text }]}
-                        >
+                {errorInfo?.componentStack ? (
+                    <View
+                        style={[
+                            styles.errorBox,
+                            { backgroundColor: card, borderColor: divider },
+                        ]}>
+                        <Text
+                            style={[
+                                styles.errorTitle,
+                                {
+                                    color: text,
+                                    fontSize: fontSizeConst.subTitle,
+                                    fontWeight: fontWeightConst.bold,
+                                },
+                            ]}>
                             📍 组件堆栈
-                        </ThemeText>
-                        <ScrollView 
+                        </Text>
+                        <ScrollView
                             style={styles.stackContainer}
-                            showsVerticalScrollIndicator={true}
-                            nestedScrollEnabled={true}
-                        >
-                            <Text style={[styles.stackText, { color: colors.textSecondary }]}>
+                            showsVerticalScrollIndicator
+                            nestedScrollEnabled>
+                            <Text
+                                style={[
+                                    styles.stackText,
+                                    { color: textSecondary },
+                                ]}>
                                 {errorInfo.componentStack}
                             </Text>
                         </ScrollView>
                     </View>
-                )}
+                ) : null}
 
-                {/* 反馈建议 */}
                 <View style={styles.feedbackSection}>
-                    <ThemeText 
-                        fontSize="subTitle" 
-                        fontWeight="bold" 
-                        style={[styles.feedbackTitle, { color: colors.text }]}
-                    >
+                    <Text
+                        style={[
+                            styles.feedbackTitle,
+                            {
+                                color: text,
+                                fontSize: fontSizeConst.subTitle,
+                                fontWeight: fontWeightConst.bold,
+                            },
+                        ]}>
                         💌 请帮忙反馈一下这个问题吧
-                    </ThemeText>
-                    
+                    </Text>
+
                     <View style={styles.feedbackOptions}>
-                        {/* GitHub Issue */}
-                        <View style={[styles.feedbackItem, { backgroundColor: colors.card, borderColor: colors.divider }]}>
-                            <ThemeText 
-                                fontSize="content" 
-                                fontWeight="medium"
-                                style={[styles.feedbackLabel, { color: colors.text }]}
-                            >
+                        <View
+                            style={[
+                                styles.feedbackItem,
+                                { backgroundColor: card, borderColor: divider },
+                            ]}>
+                            <Text
+                                style={[
+                                    styles.feedbackLabel,
+                                    {
+                                        color: text,
+                                        fontSize: fontSizeConst.content,
+                                        fontWeight: fontWeightConst.medium,
+                                    },
+                                ]}>
                                 📝 GitHub Issues (推荐):
-                            </ThemeText>
-                            <LinkText 
-                                fontSize="content"
-                                linkTo="https://github.com/maotoumao/MusicFree/issues"
-                                style={styles.link}
-                            >
-                                https://github.com/maotoumao/MusicFree/issues
-                            </LinkText>
-                            <ThemeText 
-                                fontSize="description" 
-                                style={[styles.feedbackHint, { color: colors.textSecondary }]}
-                            >
+                            </Text>
+                            <Text
+                                style={[
+                                    styles.link,
+                                    { fontSize: fontSizeConst.content },
+                                ]}
+                                onPress={() => {
+                                    openUrl(
+                                        "https://github.com/Toskysun/MusicFree/issues",
+                                    );
+                                }}>
+                                https://github.com/Toskysun/MusicFree/issues
+                            </Text>
+                            <Text
+                                style={[
+                                    styles.feedbackHint,
+                                    {
+                                        color: textSecondary,
+                                        fontSize: fontSizeConst.description,
+                                    },
+                                ]}>
                                 点击链接或复制粘贴到浏览器打开
-                            </ThemeText>
+                            </Text>
                         </View>
 
-                        {/* 微信公众号 */}
-                        <View style={[styles.feedbackItem, { backgroundColor: colors.card, borderColor: colors.divider }]}>
-                            <ThemeText 
-                                fontSize="content" 
-                                fontWeight="medium"
-                                style={[styles.feedbackLabel, { color: colors.text }]}
-                            >
+                        <View
+                            style={[
+                                styles.feedbackItem,
+                                { backgroundColor: card, borderColor: divider },
+                            ]}>
+                            <Text
+                                style={[
+                                    styles.feedbackLabel,
+                                    {
+                                        color: text,
+                                        fontSize: fontSizeConst.content,
+                                        fontWeight: fontWeightConst.medium,
+                                    },
+                                ]}>
                                 💬 微信公众号【一只猫头猫】:
-                            </ThemeText>
+                            </Text>
                             <View style={styles.qrCodeContainer}>
-                                <Image 
-                                    source={ImgAsset.wechatChannel} 
+                                <Image
+                                    source={ImgAsset.wechatChannel}
                                     style={styles.qrCode}
                                     resizeMode="contain"
                                 />
-                                <ThemeText 
-                                    fontSize="description" 
-                                    style={[styles.qrCodeHint, { color: colors.textSecondary }]}
-                                >
+                                <Text
+                                    style={[
+                                        styles.qrCodeHint,
+                                        {
+                                            color: textSecondary,
+                                            fontSize:
+                                                fontSizeConst.description,
+                                        },
+                                    ]}>
                                     扫描二维码关注公众号反馈
-                                </ThemeText>
+                                </Text>
                             </View>
                         </View>
                     </View>
@@ -290,7 +378,7 @@ const styles = StyleSheet.create({
     },
     subtitle: {
         textAlign: "center",
-        lineHeight: rpx(40),
+        lineHeight: fontRpx(40),
     },
     deviceInfoBox: {
         borderRadius: rpx(16),
@@ -310,11 +398,11 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
     deviceInfoLabel: {
-        fontSize: rpx(28),
+        fontSize: fontRpx(28),
         flex: 1,
     },
     deviceInfoValue: {
-        fontSize: rpx(28),
+        fontSize: fontRpx(28),
         flex: 2,
         textAlign: "right",
         fontWeight: "500",
@@ -329,7 +417,7 @@ const styles = StyleSheet.create({
         marginBottom: rpx(16),
     },
     errorText: {
-        lineHeight: rpx(36),
+        lineHeight: fontRpx(36),
         marginBottom: rpx(16),
     },
     stackContainer: {
@@ -339,9 +427,9 @@ const styles = StyleSheet.create({
         padding: rpx(16),
     },
     stackText: {
-        fontSize: rpx(24),
+        fontSize: fontRpx(24),
         fontFamily: "monospace",
-        lineHeight: rpx(32),
+        lineHeight: fontRpx(32),
     },
     feedbackSection: {
         marginBottom: rpx(48),
@@ -366,7 +454,7 @@ const styles = StyleSheet.create({
         fontStyle: "italic",
     },
     link: {
-        lineHeight: rpx(36),
+        lineHeight: fontRpx(36),
     },
     qrCodeContainer: {
         alignItems: "center",

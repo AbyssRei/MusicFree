@@ -2,9 +2,12 @@ import type { ResumeMode, SortType } from "@/constants/commonConst.ts";
 import type { CustomizedColors } from "@/hooks/useColors";
 
 export interface IAppConfigProperties {
-    $schema: "2";
+    $schema: "4";
+    // Common
+    "common.isAgreePact": boolean;
     // Basic
     "basic.autoPlayWhenAppStart": boolean;
+    "basic.openPlayDetailOnLaunch": boolean;
     "basic.useCelluarNetworkPlay": boolean;
     "basic.useCelluarNetworkDownload": boolean;
     "basic.maxDownload": number;
@@ -28,21 +31,71 @@ export interface IAppConfigProperties {
     "basic.notCheckPluginVersion": boolean;
     "basic.lazyLoadPlugin": boolean;
     "basic.associateLyricType": "input" | "search";
+    "basic.keyboardAvoidMode": "auto" | "manual" | "off";
     "basic.showExitOnNotification": boolean;
     "basic.musicOrderInLocalSheet": SortType;
     "basic.tryChangeSourceWhenPlayFail": boolean;
+    "basic.fileNamingType": "preset" | "custom";
+    "basic.fileNamingPreset": IFileNaming.IPresetTemplate;
+    "basic.fileNamingCustom": string;
+    "basic.fileNamingMaxLength": number;
+    "basic.fileNamingShowQuality": boolean;
+    "basic.qualityKeysList": string[];
+    "basic.qualityTranslations": Record<string, string>;
+    "basic.qualityAbbreviations": Record<string, string>;
+    // 音乐标签写入相关配置
+    "basic.writeMetadata": boolean;
+    "basic.writeMetadataCover": boolean;
+    "basic.writeMetadataLyric": boolean;
+    "basic.writeMetadataExtended": boolean;
+    // 歌词文件下载相关配置
+    "basic.downloadLyricFile": boolean;
+    "basic.lyricFileFormat": "lrc" | "txt";
+    // 歌词内容顺序配置
+    "basic.lyricOrder": ("original" | "translation" | "romanization")[];
+    // 逐字歌词配置（QRC格式保留逐字时间戳）
+    "basic.enableWordByWordLyric": boolean;
+    // Phase 1: 下载器性能优化配置
+    "basic.downloadProgressThrottleEnabled": boolean;
+    "basic.downloadSchedulerSingleFlightEnabled": boolean;
+    "basic.downloadProgressMinIntervalMs": number;
+    "basic.downloadProgressMinBytesDelta": number;
+    "basic.downloadProgressMinPercentDelta": number;
+    // Phase 2: 下载器性能优化配置
+    "basic.downloadProgressBatchEnabled": boolean;
+    "basic.downloadSystemStatusNativeMonitorEnabled": boolean;
+    "basic.downloadProgressBatchIntervalMs": number;
 
     // Lyric
     "lyric.showStatusBarLyric": boolean;
     "lyric.topPercent": number;
-    "lyric.leftPercent": number;
+    "lyric.leftPercent": number;  // 保存用户拖拽位置，不在设置页面显示
     "lyric.align": number;
     "lyric.color": string;
+    "lyric.sungColor": string;
     "lyric.backgroundColor": string;
     "lyric.widthPercent": number;
     "lyric.fontSize": number;
     "lyric.detailFontSize": number;
     "lyric.autoSearchLyric": boolean;
+    "lyric.hideDesktopLyricWhenPaused": boolean;
+    "lyric.enableWordByWord": boolean;
+    "lyric.enableWordByWordFloat": boolean;
+    "lyric.pureWhiteMode": boolean;
+    "lyric.enableBreathingDots": boolean;
+    "lyric.detailAlign": "left" | "center" | "right";
+    "lyric.desktopShowTranslation": boolean;
+    "lyric.desktopShowRomanization": boolean;
+    "lyric.desktopSecondaryFontRatio": number;
+    "lyric.desktopSecondaryAlphaRatio": number;
+    "lyric.presetIndex": number;
+    "lyric.isLocked": boolean;
+    "lyric.customPresets": Array<{
+        unsungColor: string;
+        sungColor: string;
+        backgroundColor: string;
+    } | null>;
+    "lyric.invertColors": boolean;
 
     // Theme
     "theme.background": string;
@@ -52,6 +105,11 @@ export interface IAppConfigProperties {
     "theme.customColors"?: CustomizedColors;
     "theme.followSystem": boolean;
     "theme.selectedTheme": string;
+    "theme.coverStyle": "square" | "circle";
+    "theme.musicDetailCoverStyle": "classic" | "immersive";
+    "theme.homeLayout": "overview" | "classic";
+    "theme.hideHomeHeroCard": boolean;
+    "theme.hideHomeOperations": boolean;
 
     // Backup
     "backup.resumeMode": ResumeMode;

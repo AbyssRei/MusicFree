@@ -5,11 +5,11 @@ export default function (
     onHardwareBackPress: () => boolean | null | undefined,
     deps: any[] = [],
 ) {
-    const backHandlerRef = useRef<NativeEventSubscription>();
+    const backHandlerRef = useRef<NativeEventSubscription | null>(null);
     useEffect(() => {
         if (backHandlerRef.current) {
             backHandlerRef.current.remove();
-            backHandlerRef.current = undefined;
+            backHandlerRef.current = null;
         }
 
         backHandlerRef.current = BackHandler.addEventListener(
@@ -20,8 +20,9 @@ export default function (
         return () => {
             if (backHandlerRef.current) {
                 backHandlerRef.current.remove();
-                backHandlerRef.current = undefined;
+                backHandlerRef.current = null;
             }
         };
-    }, deps);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [onHardwareBackPress, ...deps]);
 }

@@ -103,6 +103,7 @@ class AppConfig implements IAppConfig {
                 ["setting.theme.customColors", "theme.customColors"],
                 ["setting.theme.followSystem", "theme.followSystem"],
                 ["setting.theme.selectedTheme", "theme.selectedTheme"],
+                ["setting.theme.homeLayout", "theme.homeLayout"],
 
                 // Backup
                 ["setting.backup.resumeMode", "backup.resumeMode"],
@@ -165,6 +166,64 @@ class AppConfig implements IAppConfig {
             configStore.set("$schema", "2");
         }
 
+        // 设置文件命名相关的默认值
+        if (!this.getConfig("basic.fileNamingType")) {
+            this.setConfig("basic.fileNamingType", "preset");
+        }
+        if (!this.getConfig("basic.fileNamingPreset")) {
+            this.setConfig("basic.fileNamingPreset", "歌曲名-歌手");
+        }
+        if (!this.getConfig("basic.fileNamingCustom")) {
+            this.setConfig("basic.fileNamingCustom", "{title}-{artist}");
+        }
+        if (this.getConfig("basic.fileNamingShowQuality") === undefined) {
+            this.setConfig("basic.fileNamingShowQuality", false);
+        }
+        if (!this.getConfig("basic.fileNamingMaxLength")) {
+            this.setConfig("basic.fileNamingMaxLength", 200);
+        }
+
+        if (schemaVersion < 3) {
+            // Migrate lyric.detailFontSize from PersistStatus to AppConfig
+            const persistStatusStore = getOrCreateMMKV("App.PersistStatus");
+            const detailFontSizeStr = persistStatusStore.getString("lyric.detailFontSize");
+
+            if (detailFontSizeStr !== undefined && this.getConfig("lyric.detailFontSize") === undefined) {
+                try {
+                    const detailFontSize = JSON.parse(detailFontSizeStr);
+                    if (typeof detailFontSize === "number") {
+                        this.setConfig("lyric.detailFontSize", detailFontSize);
+                    }
+                } catch {
+                    // Ignore parse errors
+                }
+            }
+
+            configStore.set("$schema", "3");
+        }
+
+        if (schemaVersion < 4) {
+            // Add lyric.widthPercent config (default 0.8)
+            // leftPercent is kept for saving user drag position, but no longer shown in settings UI
+            if (this.getConfig("lyric.widthPercent") === undefined) {
+                this.setConfig("lyric.widthPercent", 0.8);
+            }
+            // Ensure leftPercent has a default value for drag position
+            if (this.getConfig("lyric.leftPercent") === undefined) {
+                this.setConfig("lyric.leftPercent", 0.5);
+            }
+
+            configStore.set("$schema", "4");
+        }
+
+        if (schemaVersion < 5) {
+            // Plugin lazy loading default ON for faster cold start.
+            // Only set when unset so users who explicitly disabled it keep false.
+            if (this.getConfig("basic.lazyLoadPlugin") === undefined) {
+                this.setConfig("basic.lazyLoadPlugin", true);
+            }
+            configStore.set("$schema", "5");
+        }
 
     }
 
@@ -177,7 +236,7 @@ class AppConfig implements IAppConfig {
         value?: IAppConfigProperties[K] | undefined,
     ): void {
         if (value === undefined) {
-            configStore.delete(key);
+            configStore.remove(key);
         } else {
             configStore.set(key, safeStringify(value));
         }

@@ -36,6 +36,10 @@ interface IPersistStatus {
     "app.scheduleCloseTime": number;
     /** 歌词-是否启用翻译 */
     "lyric.showTranslation": boolean;
+    /** 歌词-是否启用罗马音 */
+    "lyric.showRomanization": boolean;
+    /** 歌词-歌词行顺序 (original=原文, translation=翻译, romanization=罗马音) */
+    "lyric.lyricOrder": ("original" | "translation" | "romanization")[];
     /** 歌词-详情页字体大小 */
     "lyric.detailFontSize": number;
 }
@@ -46,7 +50,7 @@ function set<K extends keyof IPersistStatus>(
 ) {
     const store = getStore();
     if (value === undefined) {
-        store.delete(key);
+        store.remove(key);
     } else {
         store.set(key, JSON.stringify(value));
     }
