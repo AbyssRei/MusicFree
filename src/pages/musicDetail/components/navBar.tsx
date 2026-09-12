@@ -1,18 +1,22 @@
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import rpx from "@/utils/rpx";
 import { useNavigation } from "@react-navigation/native";
-import Tag from "@/components/base/tag";
-import { fontSizeConst, fontWeightConst } from "@/constants/uiConst";
-import Share from "react-native-share";
-import { B64Asset } from "@/constants/assetsConst";
 import IconButton from "@/components/base/iconButton";
-import { useCurrentMusic } from "@/core/trackPlayer";
+import useOrientation from "@/hooks/useOrientation";
+import HeartIcon from "./content/heartIcon";
 
-export default function NavBar() {
+interface INavBarProps {
+    onBack?: () => void;
+}
+
+export const NAV_BAR_HEIGHT = rpx(100);
+
+export default function NavBar(props: INavBarProps) {
+    const { onBack } = props;
     const navigation = useNavigation();
-    const musicItem = useCurrentMusic();
-    // const {showShare} = useShare();
+    const orientation = useOrientation();
+    const isHorizontal = orientation === "horizontal";
 
     return (
         <View style={styles.container}>
@@ -22,43 +26,17 @@ export default function NavBar() {
                 color="white"
                 style={styles.button}
                 onPress={() => {
-                    navigation.goBack();
+                    onBack?.();
+                    requestAnimationFrame(() => {
+                        navigation.goBack();
+                    });
                 }}
             />
-            <View style={styles.headerContent}>
-                <Text numberOfLines={1} style={styles.headerTitleText}>
-                    {musicItem?.title ?? "--"}
-                </Text>
-                <View style={styles.headerDesc}>
-                    <Text style={styles.headerArtistText} numberOfLines={1}>
-                        {musicItem?.artist}
-                    </Text>
-                    {musicItem?.platform ? (
-                        <Tag
-                            tagName={musicItem.platform}
-                            containerStyle={styles.tagBg}
-                            style={styles.tagText}
-                        />
-                    ) : null}
+            {isHorizontal ? (
+                <View style={styles.rightButton}>
+                    <HeartIcon />
                 </View>
-            </View>
-            <IconButton
-                name="share"
-                color="white"
-                sizeType="normal"
-                style={styles.button}
-                onPress={async () => {
-                    try {
-                        await Share.open({
-                            type: "image/jpeg",
-                            title: "MusicFree-一个插件化的免费音乐播放器",
-                            message: "MusicFree-一个插件化的免费音乐播放器",
-                            url: B64Asset.share,
-                            subject: "MusicFree分享",
-                        });
-                    } catch {}
-                }}
-            />
+            ) : null}
         </View>
     );
 }
@@ -66,42 +44,16 @@ export default function NavBar() {
 const styles = StyleSheet.create({
     container: {
         width: "100%",
-        height: rpx(150),
+        height: NAV_BAR_HEIGHT,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
+        zIndex: 2,
     },
     button: {
         marginHorizontal: rpx(24),
     },
-    headerContent: {
-        flex: 1,
-        height: rpx(150),
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    headerTitleText: {
-        color: "white",
-        fontWeight: fontWeightConst.semibold,
-        fontSize: fontSizeConst.title,
-        marginBottom: rpx(12),
-        includeFontPadding: false,
-    },
-    headerDesc: {
-        height: rpx(32),
-        flexDirection: "row",
-        alignItems: "center",
-        paddingHorizontal: rpx(40),
-    },
-    headerArtistText: {
-        color: "white",
-        fontSize: fontSizeConst.subTitle,
-        includeFontPadding: false,
-    },
-    tagBg: {
-        backgroundColor: "rgba(255, 255, 255, 0.2)",
-    },
-    tagText: {
-        color: "white",
+    rightButton: {
+        marginHorizontal: rpx(24),
     },
 });

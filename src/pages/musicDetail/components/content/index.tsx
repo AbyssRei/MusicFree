@@ -1,17 +1,32 @@
-import React, { useState } from "react";
-import { View } from "react-native";
+import React from "react";
+import { StyleSheet, View } from "react-native";
 import AlbumCover from "./albumCover";
 import Lyric from "./lyric";
 import useOrientation from "@/hooks/useOrientation";
-import Config from "@/core/appConfig";
 import globalStyle from "@/constants/globalStyle";
 
-export default function Content() {
-    const [tab, selectTab] = useState<"album" | "lyric">(
-        Config.getConfig("basic.musicDetailDefault") || "album",
-    );
+export type MusicDetailContentTab = "album" | "lyric";
+
+interface IContentProps {
+    keepAlbumCoverMounted?: boolean;
+    tab: MusicDetailContentTab;
+    selectTab: React.Dispatch<React.SetStateAction<MusicDetailContentTab>>;
+    /** Leave page — hide mini lyric before transition to avoid surface flash */
+    isExiting?: boolean;
+}
+
+export default function Content(props: IContentProps) {
+    const {
+        keepAlbumCoverMounted = true,
+        tab,
+        selectTab,
+        isExiting = false,
+    } = props;
     const orientation = useOrientation();
+
     const showAlbumCover = tab === "album" || orientation === "horizontal";
+    const showLyric = tab === "lyric" && orientation !== "horizontal";
+    const shouldRenderAlbumCover = showAlbumCover || keepAlbumCoverMounted;
 
     const onTurnPageClick = () => {
         if (orientation === "horizontal") {
@@ -26,11 +41,41 @@ export default function Content() {
 
     return (
         <View style={globalStyle.fwflex1}>
-            {showAlbumCover ? (
-                <AlbumCover onTurnPageClick={onTurnPageClick} />
-            ) : (
-                <Lyric onTurnPageClick={onTurnPageClick} />
-            )}
+            {shouldRenderAlbumCover ? (
+                <View style={[
+                    globalStyle.fwflex1,
+                    !showAlbumCover && styles.hidden,
+                ]}>
+                    <AlbumCover
+                        onTurnPageClick={onTurnPageClick}
+                        isExiting={isExiting}
+                        isActive={showAlbumCover}
+                    />
+                </View>
+            ) : null}
+            {/* Keep Lyric mounted to preserve state; re-center when tab becomes active. */}
+            <View style={[
+                globalStyle.fwflex1,
+                !showLyric && styles.hidden,
+            ]}>
+                <Lyric
+                    onTurnPageClick={onTurnPageClick}
+                    isActive={showLyric}
+                />
+            </View>
         </View>
     );
 }
+
+const styles = StyleSheet.create({
+    hidden: {
+        position: "absolute",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        opacity: 0,
+        pointerEvents: "none",
+        transform: [{ translateX: 10000 }],
+    },
+});

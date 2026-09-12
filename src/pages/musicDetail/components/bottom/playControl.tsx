@@ -1,5 +1,5 @@
 import repeatModeConst from "@/constants/repeatModeConst";
-import rpx from "@/utils/rpx";
+import rpx, { rpxRound } from "@/utils/rpx";
 import React from "react";
 import { InteractionManager, StyleSheet, View } from "react-native";
 
@@ -9,6 +9,7 @@ import TrackPlayer, { useMusicState, useRepeatMode } from "@/core/trackPlayer";
 import useOrientation from "@/hooks/useOrientation";
 import delay from "@/utils/delay";
 import { musicIsPaused } from "@/utils/trackUtils";
+import { devLog } from "@/utils/log";
 
 export default function () {
     const repeatMode = useRepeatMode();
@@ -16,23 +17,22 @@ export default function () {
 
     const orientation = useOrientation();
 
-    console.log(repeatMode, repeatModeConst[repeatMode]);
+    devLog("info", "🎵[播放控制] 重复模式状态", { 
+        repeatMode, 
+        repeatModeText: repeatModeConst[repeatMode] 
+    });
 
     return (
         <>
             <View
                 style={[
                     style.wrapper,
-                    orientation === "horizontal"
-                        ? {
-                            marginTop: 0,
-                        }
-                        : null,
+                    orientation === "horizontal" ? style.horizontalWrapper : null,
                 ]}>
                 <Icon
                     color={"white"}
                     name={repeatModeConst[repeatMode].icon}
-                    size={rpx(56)}
+                    size={rpxRound(56)}
                     onPress={async () => {
                         InteractionManager.runAfterInteractions(async () => {
                             await delay(20, false);
@@ -43,7 +43,7 @@ export default function () {
                 <Icon
                     color={"white"}
                     name={"skip-left"}
-                    size={rpx(56)}
+                    size={rpxRound(56)}
                     onPress={() => {
                         TrackPlayer.skipToPrevious();
                     }}
@@ -51,7 +51,7 @@ export default function () {
                 <Icon
                     color={"white"}
                     name={musicIsPaused(musicState) ? "play" : "pause"}
-                    size={rpx(96)}
+                    size={rpxRound(96)}
                     onPress={() => {
                         if (musicIsPaused(musicState)) {
                             TrackPlayer.play();
@@ -63,7 +63,7 @@ export default function () {
                 <Icon
                     color={"white"}
                     name={"skip-right"}
-                    size={rpx(56)}
+                    size={rpxRound(56)}
                     onPress={() => {
                         TrackPlayer.skipToNext();
                     }}
@@ -71,7 +71,7 @@ export default function () {
                 <Icon
                     color={"white"}
                     name={"playlist"}
-                    size={rpx(56)}
+                    size={rpxRound(56)}
                     onPress={() => {
                         showPanel("PlayList");
                     }}
@@ -89,5 +89,8 @@ const style = StyleSheet.create({
         flexDirection: "row",
         justifyContent: "space-around",
         alignItems: "center",
+    },
+    horizontalWrapper: {
+        marginTop: 0,
     },
 });

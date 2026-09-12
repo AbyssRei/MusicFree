@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
-import { Image, Pressable, StyleSheet, View } from "react-native";
-import rpx from "@/utils/rpx";
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import rpx, { fontRpx } from "@/utils/rpx";
 
 import LocalMusicSheet from "@/core/localMusicSheet";
 import { ROUTE_PATH } from "@/core/router";
@@ -9,14 +9,16 @@ import Toast from "@/utils/toast";
 import toast from "@/utils/toast";
 import useOrientation from "@/hooks/useOrientation";
 import { showPanel } from "@/components/panels/usePanel";
+import { showDialog, hideDialog } from "@/components/dialogs/useDialog";
 import TrackPlayer, { useCurrentMusic, useMusicQuality } from "@/core/trackPlayer";
 import { iconSizeConst } from "@/constants/uiConst";
 import PersistStatus from "@/utils/persistStatus";
-import HeartIcon from "../heartIcon";
 import Icon from "@/components/base/icon.tsx";
 import PluginManager from "@/core/pluginManager";
 import downloader from "@/core/downloader";
 import i18n from "@/core/i18n";
+
+import { getQualityAbbr, musicItemHasQualitySizes } from "@/utils/qualities";
 
 export default function Operations() {
     const musicItem = useCurrentMusic();
@@ -38,14 +40,41 @@ export default function Operations() {
                 styles.wrapper,
                 orientation === "horizontal" ? styles.horizontalWrapper : null,
             ]}>
-            <HeartIcon />
             <Pressable
-                onPress={() => {
+                style={styles.qualityButton}
+                onPress={async () => {
                     if (!musicItem) {
                         return;
                     }
+                    let panelMusicItem = musicItem;
+                    try {
+                        const plugin = PluginManager.getByName(
+                            musicItem.platform,
+                        );
+                        if (
+                            plugin?.methods?.getMusicInfo &&
+                            (!musicItem.qualities ||
+                                !musicItemHasQualitySizes(musicItem))
+                        ) {
+                            const additionalInfo =
+                                await plugin.methods.getMusicInfo(musicItem);
+                            if (additionalInfo) {
+                                panelMusicItem = {
+                                    ...musicItem,
+                                    ...additionalInfo,
+                                    qualities:
+                                        additionalInfo.qualities ??
+                                        musicItem.qualities,
+                                    id: musicItem.id,
+                                    platform: musicItem.platform,
+                                };
+                            }
+                        }
+                    } catch {
+                        // fall back to list item
+                    }
                     showPanel("MusicQuality", {
-                        musicItem,
+                        musicItem: panelMusicItem,
                         async onQualityPress(quality) {
                             const changeResult =
                                 await TrackPlayer.changeQuality(quality);
@@ -55,24 +84,71 @@ export default function Operations() {
                         },
                     });
                 }}>
-                <Image
-                    source={ImgAsset.quality[currentQuality]}
-                    style={styles.quality}
-                />
+                <Text style={styles.qualityText}>
+                    {getQualityAbbr(currentQuality) || "HQ"}
+                </Text>
             </Pressable>
             <Icon
                 name={isDownloaded ? "check-circle-outline" : "arrow-down-tray"}
                 size={iconSizeConst.normal}
                 color="white"
-                onPress={() => {
+                onPress={async () => {
                     if (musicItem && !isDownloaded) {
-                        showPanel("MusicQuality", {
-                            type: "download",
-                            musicItem,
-                            async onQualityPress(quality) {
-                                downloader.download(musicItem, quality);
-                            },
+                        // 显示加载状态
+                        showDialog("LoadingDialog", {
+                            title: i18n.t("downloading.downloadStatus.preparing"),
                         });
+
+                        try {
+                            // 获取插件实例
+                            const plugin = PluginManager.getByName(musicItem.platform);
+                            let enhancedMusicItem = musicItem;
+                            
+                            // Fetch full quality/size when missing or sizes are empty.
+                            if (
+                                plugin?.methods?.getMusicInfo &&
+                                (!musicItem.qualities ||
+                                    !musicItemHasQualitySizes(musicItem))
+                            ) {
+                                const additionalInfo = await plugin.methods.getMusicInfo(musicItem);
+                                if (additionalInfo) {
+                                    enhancedMusicItem = {
+                                        ...musicItem,
+                                        ...additionalInfo,
+                                        qualities:
+                                            additionalInfo.qualities ??
+                                            musicItem.qualities,
+                                        // 保持原有的基本信息不被覆盖
+                                        id: musicItem.id,
+                                        platform: musicItem.platform,
+                                    };
+                                }
+                            }
+
+                            // 隐藏加载对话框
+                            hideDialog();
+
+                            // 显示音质选择面板
+                            showPanel("MusicQuality", {
+                                type: "download",
+                                musicItem: enhancedMusicItem,
+                                async onQualityPress(quality) {
+                                    downloader.download(enhancedMusicItem, quality);
+                                },
+                            });
+                        } catch {
+                            // 隐藏加载对话框
+                            hideDialog();
+                            
+                            // 出错时使用原始音乐信息
+                            showPanel("MusicQuality", {
+                                type: "download",
+                                musicItem,
+                                async onQualityPress(quality) {
+                                    downloader.download(musicItem, quality);
+                                },
+                            });
+                        }
                     }
                 }}
             />
@@ -143,5 +219,16 @@ const styles = StyleSheet.create({
     quality: {
         width: rpx(52),
         height: rpx(52),
+    },
+    qualityButton: {
+        height: rpx(42),
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    qualityText: {
+        color: "white",
+        fontSize: fontRpx(26),
+        fontWeight: "400",
+        lineHeight: fontRpx(42),
     },
 });

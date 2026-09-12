@@ -1,14 +1,19 @@
 import React from "react";
-import { StyleSheet, View } from "react-native";
+import { Platform, Share, StyleSheet, View } from "react-native";
 import rpx from "@/utils/rpx";
 import ListItem from "@/components/base/listItem";
 import ThemeText from "@/components/base/themeText";
 import { ImgAsset } from "@/constants/assetsConst";
 import Clipboard from "@react-native-clipboard/clipboard";
 
-import { getMediaUniqueKey } from "@/utils/mediaUtils";
+import {
+    buildFallbackMusicDetailUrl,
+    getPlatformMediaId,
+    isSameMediaItem,
+} from "@/utils/mediaUtils";
 import FastImage from "@/components/base/fastImage";
 import Toast from "@/utils/toast";
+import { devLog } from "@/utils/log";
 import LocalMusicSheet from "@/core/localMusicSheet";
 import { localMusicSheetId, musicHistorySheetId } from "@/constants/commonConst";
 import { ROUTE_PATH } from "@/core/router";
@@ -17,20 +22,25 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import PanelBase from "../base/panelBase";
 import { FlatList } from "react-native-gesture-handler";
 import musicHistory from "@/core/musicHistory";
-import { showDialog } from "@/components/dialogs/useDialog";
+import { showDialog, hideDialog } from "@/components/dialogs/useDialog";
 import { hidePanel, showPanel } from "../usePanel";
+import { showMvPlayer } from "@/components/mvPlayer/useMvPlayer";
 import Divider from "@/components/base/divider";
 import { iconSizeConst } from "@/constants/uiConst";
 import Config from "@/core/appConfig";
-import TrackPlayer from "@/core/trackPlayer";
+import TrackPlayer, { useCurrentMusic } from "@/core/trackPlayer";
 import mediaCache from "@/core/mediaCache";
 import { IIconName } from "@/components/base/icon.tsx";
 import MusicSheet from "@/core/musicSheet";
 import downloader from "@/core/downloader";
 import { getMediaExtraProperty } from "@/utils/mediaExtra";
+import { hasAssociatedArtwork, resolveArtwork } from "@/utils/artwork";
 import lyricManager from "@/core/lyricManager";
 import { useI18N } from "@/core/i18n";
 import pluginManager from "@/core/pluginManager";
+import { musicItemHasQualitySizes } from "@/utils/qualities";
+import { canPlayMusicVideo } from "@/utils/musicVideo";
+import * as ScreenOrientation from "expo-screen-orientation";
 
 interface IMusicItemOptionsProps {
     /** 歌曲信息 */
@@ -50,30 +60,156 @@ interface IOption {
     show?: boolean;
 }
 
+const getAlbumIds = (musicItem: IMusic.IMusicItem) => {
+    const item = musicItem as any;
+    const albumId = item.albumid || item.albumId || item.album_id;
+    const albumMid = item.albummid || item.albumMid;
+
+    if (musicItem.album && !albumId && !albumMid) {
+        devLog("warn", "[专辑ID] 未找到专辑ID字段", {
+            platform: musicItem.platform,
+            album: musicItem.album,
+            keys: Object.keys(item).filter(k => k.toLowerCase().includes("album")),
+        });
+    }
+
+    return { albumId, albumMid };
+};
+
+const formatMusicSharePayload = async (musicItem: IMusic.IMusicItem) => {
+    const title = musicItem.title?.toString().trim();
+    const artist = musicItem.artist?.toString().trim();
+    // Keep spaces in title for readability; do not strip newlines from URL line.
+    const musicTitle =
+        title && artist
+            ? `${title} - ${artist}`
+            : title ||
+              artist ||
+              getPlatformMediaId(musicItem) ||
+              String(musicItem.id ?? "");
+
+    let detailUrl = "";
+    try {
+        const plugin = pluginManager.getByMedia(musicItem);
+        // PluginMethodsWrapper always exposes this method; it mounts lazy plugins.
+        if (plugin?.methods?.getMusicDetailPageUrl) {
+            detailUrl =
+                (await plugin.methods.getMusicDetailPageUrl(musicItem)) || "";
+        }
+    } catch (e) {
+        devLog("warn", "获取分享链接失败", e);
+    }
+
+    // No plugin / plugin returned empty → host platform fallback.
+    if (!detailUrl) {
+        detailUrl = buildFallbackMusicDetailUrl(musicItem);
+    }
+
+    detailUrl = (detailUrl || "").trim();
+    // Always put URL in message (Android ignores ShareContent.url).
+    const message = detailUrl ? `${musicTitle}\n${detailUrl}` : musicTitle;
+    return { message, url: detailUrl || undefined, musicTitle };
+};
+
+/** True when Share rejected because the user dismissed the sheet. */
+const isShareDismissError = (e: unknown) => {
+    const msg = String((e as any)?.message ?? e ?? "");
+    return /cancel|dismiss|User did not share|Share is dismissed/i.test(msg);
+};
+
 export default function MusicItemOptions(props: IMusicItemOptionsProps) {
-    const { musicItem, musicSheet, from } = props ?? {};
+    const { musicItem: propseMusicItem, musicSheet, from } = props ?? {};
     const { t } = useI18N();
+
+    // If this is the currently playing music, use the latest state from TrackPlayer
+    const currentMusic = useCurrentMusic();
+    const musicItem = (currentMusic && isSameMediaItem(currentMusic, propseMusicItem))
+        ? currentMusic
+        : propseMusicItem;
 
     const safeAreaInsets = useSafeAreaInsets();
 
     const downloaded = LocalMusicSheet.isLocalMusic(musicItem);
     const associatedLrc = getMediaExtraProperty(musicItem, "associatedLrc");
+    const associatedCover = hasAssociatedArtwork(musicItem);
+    const displayArtwork = resolveArtwork(musicItem);
 
     const options: IOption[] = [
         {
+            icon: "play-circle-outline",
+            title: t("panel.musicItemOptions.playMv"),
+            show: canPlayMusicVideo(musicItem),
+            onPress: async () => {
+                const plugin = pluginManager.getByMedia(musicItem);
+                try {
+                    const initialQuality = musicItem.videoQuality;
+                    const initialSource = await plugin?.methods?.getMvSource(
+                        musicItem,
+                        initialQuality,
+                    );
+                    if (!initialSource?.url) {
+                        throw new Error(t("panel.mvPlayer.sourceUnavailable"));
+                    }
+                    const declaredQuality = (
+                        plugin?.instance?.supportedVideoQualities ?? []
+                    )
+                        .map(option =>
+                            typeof option === "string"
+                                ? { key: option }
+                                : option,
+                        )
+                        .find(
+                            option =>
+                                option.key ===
+                                (initialSource.videoQuality || initialQuality),
+                        );
+                    const videoWidth = initialSource.width ?? declaredQuality?.width;
+                    const videoHeight = initialSource.height ?? declaredQuality?.height;
+                    if (videoWidth && videoHeight) {
+                        const lock = videoWidth >= videoHeight
+                            ? ScreenOrientation.OrientationLock.LANDSCAPE
+                            : ScreenOrientation.OrientationLock.PORTRAIT;
+                        await ScreenOrientation.lockAsync(lock).catch(
+                            () => undefined,
+                        );
+                    }
+                    showMvPlayer({ musicItem, initialSource });
+                } catch (reason) {
+                    hidePanel();
+                    Toast.warn(
+                        reason instanceof Error
+                            ? reason.message
+                            : t("panel.mvPlayer.loadFailed"),
+                    );
+                }
+            },
+        },
+        {
             icon: "identification",
-            title: `ID: ${getMediaUniqueKey(musicItem)}`,
+            title: (() => {
+                const songId = musicItem.id;
+                const songMid = musicItem.songmid || musicItem.mid;
+
+                const ids: string[] = [];
+                if (songId) ids.push(`id: ${songId}`);
+                if (songMid) ids.push(`mid: ${songMid}`);
+
+                if (ids.length > 0) {
+                    return `ID: ${musicItem.platform} (${ids.join(", ")})`;
+                }
+                return `ID: ${musicItem.platform} ${getPlatformMediaId(musicItem)}`;
+            })(),
             onPress: () => {
                 mediaCache.setMediaCache(musicItem);
+                const copyData: any = {
+                    platform: musicItem.platform,
+                    id: musicItem.id,
+                };
+                if (musicItem.songmid || musicItem.mid) {
+                    copyData.songmid = musicItem.songmid || musicItem.mid;
+                }
                 Clipboard.setString(
-                    JSON.stringify(
-                        {
-                            platform: musicItem.platform,
-                            id: musicItem.id,
-                        },
-                        null,
-                        "",
-                    ),
+                    JSON.stringify(copyData, null, ""),
                 );
                 Toast.success(t("toast.copiedToClipboard"));
             },
@@ -93,13 +229,96 @@ export default function MusicItemOptions(props: IMusicItemOptionsProps) {
         {
             icon: "album-outline",
             show: !!musicItem.album,
-            title: t("panel.musicItemOptions.album", { album: musicItem.album }),
+            title: (() => {
+                const { albumId, albumMid } = getAlbumIds(musicItem);
+                const albumText = musicItem.album;
+
+                const ids: string[] = [];
+                if (albumId) ids.push(`id: ${albumId}`);
+                if (albumMid) ids.push(`mid: ${albumMid}`);
+
+                if (ids.length > 0) {
+                    return `${t("panel.musicItemOptions.album", { album: albumText })} (${ids.join(", ")})`;
+                }
+                return t("panel.musicItemOptions.album", { album: albumText });
+            })(),
             onPress: () => {
                 try {
-                    Clipboard.setString(musicItem.album.toString());
+                    const { albumId, albumMid } = getAlbumIds(musicItem);
+                    let copyText = musicItem.album.toString();
+
+                    if (albumId || albumMid) {
+                        const copyData: any = {
+                            platform: musicItem.platform,
+                            album: musicItem.album,
+                        };
+                        if (albumId) copyData.albumId = albumId;
+                        if (albumMid) copyData.albumMid = albumMid;
+
+                        copyText = JSON.stringify(copyData, null, "");
+                    }
+
+                    Clipboard.setString(copyText);
                     Toast.success(t("toast.copiedToClipboard"));
                 } catch {
                     Toast.warn(t("toast.copiedToClipboardFailed"));
+                }
+            },
+        },
+        {
+            icon: "share",
+            title: t("panel.musicItemOptions.share"),
+            onPress: async () => {
+                // Close options panel first so the system share sheet is not
+                // blocked by the high-zIndex panel overlay on some devices.
+                hidePanel();
+                try {
+                    const { message, url } =
+                        await formatMusicSharePayload(musicItem);
+                    if (!message) {
+                        Toast.warn(t("toast.failToShareMusic"));
+                        return;
+                    }
+                    const content: { title: string; message: string; url?: string } = {
+                        title: t("panel.musicItemOptions.shareTitle"),
+                        message,
+                    };
+                    // url is iOS-only; Android already has the link in message.
+                    if (url && Platform.OS === "ios") {
+                        content.url = url;
+                    }
+                    const result = await Share.share(content, {
+                        dialogTitle: t(
+                            "panel.musicItemOptions.shareDialogTitle",
+                            {
+                                title:
+                                    musicItem.title ||
+                                    t("panel.musicItemOptions.shareTitle"),
+                            },
+                        ),
+                        subject: t("panel.musicItemOptions.shareTitle"),
+                    });
+                    if (result?.action === Share.dismissedAction) {
+                        return;
+                    }
+                } catch (e) {
+                    if (isShareDismissError(e)) {
+                        return;
+                    }
+                    // Last resort: copy share text so the user still gets the link.
+                    try {
+                        const { message } =
+                            await formatMusicSharePayload(musicItem);
+                        if (message) {
+                            Clipboard.setString(message);
+                            Toast.success(t("toast.copiedToClipboard"));
+                            return;
+                        }
+                    } catch {
+                        // ignore
+                    }
+                    devLog("warn", "分享歌曲失败", e);
+                    Toast.warn(t("toast.failToShareMusic"));
                 }
             },
         },
@@ -120,22 +339,63 @@ export default function MusicItemOptions(props: IMusicItemOptionsProps) {
         },
         {
             icon: "arrow-down-tray",
-            title: t("common.download"),
-            show: !downloaded,
+            title: downloaded ? t("panel.musicItemOptions.redownload") : t("common.download"),
+            show: true,
             onPress: async () => {
-                showPanel("MusicQuality", {
-                    musicItem,
-                    type: "download",
-                    async onQualityPress(quality) {
-                        downloader.download(musicItem, quality);
-                    },
+                // 显示加载状态
+                showDialog("LoadingDialog", {
+                    title: t("downloading.downloadStatus.preparing"),
                 });
+
+                try {
+                    // 获取插件实例
+                    const plugin = pluginManager.getByName(musicItem.platform);
+                    let enhancedMusicItem = musicItem;
+                    
+                    // Fetch full quality/size when missing or sizes are empty.
+                    if (
+                        plugin?.methods?.getMusicInfo &&
+                        (!musicItem.qualities || !musicItemHasQualitySizes(musicItem))
+                    ) {
+                        const additionalInfo = await plugin.methods.getMusicInfo(musicItem);
+                        if (additionalInfo) {
+                            enhancedMusicItem = {
+                                ...musicItem,
+                                ...additionalInfo,
+                                qualities:
+                                    additionalInfo.qualities ?? musicItem.qualities,
+                                // 保持原有的基本信息不被覆盖
+                                id: musicItem.id,
+                                platform: musicItem.platform,
+                            };
+                        }
+                    }
+
+                    // 隐藏加载对话框
+                    hideDialog();
+
+                    // 显示音质选择面板
+                    showPanel("MusicQuality", {
+                        musicItem: enhancedMusicItem,
+                        type: "download",
+                        async onQualityPress(quality) {
+                            downloader.download(enhancedMusicItem, quality);
+                        },
+                    });
+                } catch {
+                    // 隐藏加载对话框
+                    hideDialog();
+                    
+                    // 出错时使用原始音乐信息
+                    showPanel("MusicQuality", {
+                        musicItem,
+                        type: "download",
+                        async onQualityPress(quality) {
+                            downloader.download(musicItem, quality);
+                        },
+                    });
+                }
             },
-        },
-        {
-            icon: "check-circle-outline",
-            title: t("panel.musicItemOptions.downloaded"),
-            show: !!downloaded,
         },
         {
             icon: "trash-outline",
@@ -216,6 +476,17 @@ export default function MusicItemOptions(props: IMusicItemOptionsProps) {
             },
         },
         {
+            icon: "album-outline",
+            title: associatedCover
+                ? t("panel.musicItemOptions.associatedCover")
+                : t("panel.musicItemOptions.manageCover"),
+            onPress: () => {
+                showPanel("CoverOptions", {
+                    musicItem,
+                });
+            },
+        },
+        {
             icon: "alarm-outline",
             title: t("panel.musicItemOptions.timingClose"),
             show: from === ROUTE_PATH.MUSIC_DETAIL,
@@ -240,7 +511,7 @@ export default function MusicItemOptions(props: IMusicItemOptionsProps) {
                     <View style={style.header}>
                         <FastImage
                             style={style.artwork}
-                            source={musicItem?.artwork}
+                            source={displayArtwork}
                             placeholderSource={ImgAsset.albumDefault}
                         />
                         <View style={style.content}>
