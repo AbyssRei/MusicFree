@@ -1,6 +1,6 @@
 import React from "react";
-import { StyleSheet, TouchableOpacity, View } from "react-native";
-import rpx from "@/utils/rpx";
+import { Pressable, StyleSheet, TouchableOpacity, View } from "react-native";
+import rpx, { fontRpx } from "@/utils/rpx";
 import ThemeText from "@/components/base/themeText";
 
 import { setCloseAfterPlayEnd, setScheduleClose, useCloseAfterPlayEnd, useScheduleCloseCountDown } from "@/utils/scheduleClose";
@@ -9,7 +9,6 @@ import PanelBase from "../base/panelBase";
 import Divider from "@/components/base/divider";
 import PanelHeader from "../base/panelHeader";
 import Checkbox from "@/components/base/checkbox";
-import { Pressable } from "react-native-gesture-handler";
 import { useI18N } from "@/core/i18n";
 import { showDialog } from "@/components/dialogs/useDialog";
 
@@ -133,7 +132,7 @@ const styles = StyleSheet.create({
     },
     cancelButtonText: {
         color: "#ffffff",
-        fontSize: rpx(24),
+        fontSize: fontRpx(24),
     },
     closeAfterPlayContainer: {
         flexDirection: "row",

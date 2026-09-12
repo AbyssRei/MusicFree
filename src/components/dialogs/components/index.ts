@@ -7,6 +7,8 @@ import RadioDialog from "./radioDialog";
 import SimpleDialog from "./simpleDialog";
 import SubscribePluginDialog from "./subscribePluginDialog";
 import SetScheduleCloseTimeDialog from "./setScheduleCloseTimeDialog";
+import AnnouncementDialog from "./announcementDialog";
+import PactDialog from "./pactDialog";
 
 const dialogs = {
     SimpleDialog,
@@ -18,6 +20,8 @@ const dialogs = {
     CheckStorage,
     MarkdownDialog,
     SetScheduleCloseTimeDialog,
+    AnnouncementDialog,
+    PactDialog,
 };
 
 export default dialogs;

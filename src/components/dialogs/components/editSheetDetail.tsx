@@ -13,7 +13,8 @@ import { hideDialog } from "../useDialog";
 import Dialog from "./base";
 import Input from "@/components/base/input";
 import { fontSizeConst } from "@/constants/uiConst";
-import { copyAsync, deleteAsync, getInfoAsync } from "expo-file-system";
+import { devLog } from "@/utils/log";
+import { copyAsync, deleteAsync, getInfoAsync } from "expo-file-system/legacy";
 import MusicSheet from "@/core/musicSheet";
 import { useI18N } from "@/core/i18n";
 
@@ -40,10 +41,10 @@ export default function EditSheetDetailDialog(props: IEditSheetDetailProps) {
             if (!uri) {
                 return;
             }
-            console.log(uri);
+            devLog("info", "📁[编辑歌单] 选择封面图片", { uri });
             setCoverImg(uri);
         } catch (e) {
-            console.log(e);
+            devLog("warn", "📁[编辑歌单] 选择图片失败", e);
         }
     };
 
@@ -76,7 +77,7 @@ export default function EditSheetDetailDialog(props: IEditSheetDetailProps) {
                     to: newCoverImg,
                 });
             } catch (e) {
-                console.log(e);
+                devLog("warn", "📁[编辑歌单] 复制封面图片失败", e);
             }
         }
         let _title = title;
@@ -118,13 +119,13 @@ export default function EditSheetDetailDialog(props: IEditSheetDetailProps) {
                         value={title}
                         hasHorizontalPadding={false}
                         onChangeText={onTitleChange}
-                        style={{
-                            height: fontSizeConst.content * 2.5,
-                            width: "50%",
-                            borderBottomWidth: 1,
-                            includeFontPadding: false,
-                            borderBottomColor: colors.text,
-                        }}
+                        style={[
+                            style.titleInput,
+                            {
+                                height: fontSizeConst.content * 2.5,
+                                borderBottomColor: colors.text,
+                            },
+                        ]}
                     />
                 </View>
             </Dialog.Content>
@@ -159,5 +160,10 @@ const style = StyleSheet.create({
         width: rpx(100),
         height: rpx(100),
         borderRadius: rpx(28),
+    },
+    titleInput: {
+        width: "50%",
+        borderBottomWidth: 1,
+        includeFontPadding: false,
     },
 });

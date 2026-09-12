@@ -1,14 +1,13 @@
 import React, { useState } from "react";
-import { StyleSheet, Text } from "react-native";
+import { StyleSheet } from "react-native";
 import rpx from "@/utils/rpx";
-import { SceneMap, TabBar, TabView } from "react-native-tab-view";
-import { fontWeightConst } from "@/constants/uiConst";
+import { SceneMap, TabView } from "react-native-tab-view";
 import ResultList from "./resultList";
 import { useAtomValue } from "jotai";
 import { queryResultAtom } from "../store/atoms";
 import content from "./content";
-import useColors from "@/hooks/useColors";
 import { useI18N } from "@/core/i18n";
+import PillTabBar from "@/components/base/pillTabBar";
 
 const sceneMap: Record<string, React.FC> = {
     album: BodyContentWrapper,
@@ -30,7 +29,6 @@ const routes = [
 
 export default function Body() {
     const [index, setIndex] = useState(0);
-    const colors = useColors();
     const { t } = useI18N();
 
     return (
@@ -41,31 +39,17 @@ export default function Body() {
                 index,
                 routes,
             }}
-            renderTabBar={props => (
-                <TabBar
-                    {...props}
-                    style={style.transparentColor}
-                    tabStyle={{
-                        width: "auto",
-                    }}
-                    renderIndicator={() => null}
-                    pressColor="transparent"
-                    inactiveColor={colors.text}
-                    activeColor={colors.primary}
-                    renderLabel={({ route, focused, color }) => (
-                        <Text
-                            numberOfLines={1}
-                            style={{
-                                width: rpx(160),
-                                fontWeight: focused
-                                    ? fontWeightConst.bolder
-                                    : fontWeightConst.medium,
-                                color,
-                                textAlign: "center",
-                            }}>
-                            {t(route.i18nKey as any) ?? route.title}
-                        </Text>
-                    )}
+            renderTabBar={() => (
+                <PillTabBar
+                    routes={routes}
+                    index={index}
+                    onIndexChange={setIndex}
+                    variant="underline"
+                    getTitle={route =>
+                        t((route as (typeof routes)[number]).i18nKey as any) ??
+                        route.title ??
+                        route.key
+                    }
                 />
             )}
             renderScene={SceneMap(sceneMap)}
@@ -92,10 +76,5 @@ export function BodyContentWrapper(props: any) {
 const style = StyleSheet.create({
     wrapper: {
         zIndex: 100,
-    },
-    transparentColor: {
-        backgroundColor: "transparent",
-        shadowColor: "transparent",
-        borderColor: "transparent",
     },
 });

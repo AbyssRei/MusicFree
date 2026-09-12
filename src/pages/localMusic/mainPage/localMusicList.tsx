@@ -10,12 +10,18 @@ export default function LocalMusicList() {
     const musicList = LocalMusicSheet.useMusicList();
     const { t } = useI18N();
 
+    React.useEffect(() => {
+        void LocalMusicSheet.hydrateArtwork(musicList);
+    }, [musicList.length]);
+
     return (
         <HorizontalSafeAreaView style={globalStyle.flex1}>
             <MusicList
                 musicList={musicList}
                 showIndex
                 state={RequestStateCode.IDLE}
+                variant="card"
+                itemSpacing={12}
                 musicSheet={{
                     id: localMusicSheetId,
                     title: t("common.local"),

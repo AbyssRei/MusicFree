@@ -5,10 +5,14 @@ import { ImgAsset } from "@/constants/assetsConst";
 import globalStyle from "@/constants/globalStyle";
 import pathConst from "@/constants/pathConst";
 import { useI18N } from "@/core/i18n";
-import Theme from "@/core/theme";
+import Theme, {
+    customBackgroundSurfaceColors,
+    darkTheme,
+} from "@/core/theme";
 import { CustomizedColors } from "@/hooks/useColors";
 import { grayRate } from "@/utils/colorUtil";
 import rpx from "@/utils/rpx";
+import { devLog } from "@/utils/log";
 import Slider from "@react-native-community/slider";
 import Color from "color";
 import React from "react";
@@ -17,6 +21,8 @@ import { copyFile } from "react-native-fs";
 import { ScrollView, TouchableOpacity } from "react-native-gesture-handler";
 import ImageColors from "react-native-image-colors";
 import { launchImageLibrary } from "react-native-image-picker";
+
+const BACKGROUND_MAX_DIMENSION = 2048;
 
 export default function Body() {
     const theme = Theme.useTheme();
@@ -27,6 +33,11 @@ export default function Body() {
         try {
             const result = await launchImageLibrary({
                 mediaType: "photo",
+                // A full-resolution camera image makes Fresco's blur
+                // postprocessor decode far more pixels than the screen needs.
+                maxWidth: BACKGROUND_MAX_DIMENSION,
+                maxHeight: BACKGROUND_MAX_DIMENSION,
+                quality: 0.85,
             });
             const uri = result.assets?.[0].uri;
             if (!uri) {
@@ -63,47 +74,47 @@ export default function Body() {
             };
 
             const primaryGrayRate = grayRate(colors.primary!);
+            const neutralMusicBar = Color(darkTheme.colors.musicBar)
+                .alpha(0.92)
+                .toString();
 
             let themeColors: Partial<CustomizedColors>;
             if (primaryGrayRate < -0.4) {
                 const primaryColor = Color(colors.primary!);
 
-                console.log(
-                    colors.primary,
-                    primaryGrayRate,
-                    primaryColor
+                devLog("info", "🎨[自定义主题] 主色调分析", {
+                    primaryColor: colors.primary,
+                    grayRate: primaryGrayRate,
+                    whitenedColor: primaryColor
                         .whiten(3 * primaryGrayRate)
                         .hex()
                         .toString(),
-                );
+                });
                 themeColors = {
-                    appBar: colors.primary,
+                    ...customBackgroundSurfaceColors,
                     primary: primaryColor
                         .darken(primaryGrayRate * 5)
                         .toString(),
-                    musicBar: colors.primary,
-                    card: "rgba(0,0,0,0.2)",
+                    musicBar: neutralMusicBar,
                     tabBar: primaryColor.alpha(0.2).toString(),
                 };
             } else if (primaryGrayRate > 0.4) {
                 themeColors = {
-                    appBar: colors.primary,
+                    ...customBackgroundSurfaceColors,
                     primary: Color(colors.primary)
                         .darken(primaryGrayRate * 5)
                         .toString(),
-                    musicBar: colors.primary,
-                    card: "rgba(0,0,0,0.2)",
+                    musicBar: neutralMusicBar,
                 };
             } else {
                 // const primaryColor = Color(colors.primary!);
 
                 themeColors = {
-                    appBar: colors.primary,
+                    ...customBackgroundSurfaceColors,
                     primary: Color(colors.primary)
                         .saturate(Math.abs(primaryGrayRate) * 2 + 2)
                         .toString(),
-                    musicBar: colors.primary,
-                    card: "rgba(0,0,0,0.2)",
+                    musicBar: neutralMusicBar,
                 };
             }
 
@@ -119,7 +130,7 @@ export default function Body() {
             //     accent: textHighlight,
             // });
         } catch (e) {
-            console.log(e);
+            devLog("warn", "🎨[自定义主题] 主题生成异常", e);
         }
     }
 

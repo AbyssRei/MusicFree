@@ -30,10 +30,12 @@ export default function () {
             setPageStatus(PageStatus.EDITING);
             setQuery("");
         };
-    }, []);
+    }, [setPageStatus, setQuery, setSearchResultsState]);
 
     return (
-        <SafeAreaView edges={["bottom", "top"]} style={style.wrapper}>
+        <SafeAreaView
+            edges={["bottom", "top"]}
+            style={style.wrapper}>
             <StatusBar />
             <NavBar />
             <SafeAreaView edges={["left", "right"]} style={style.wrapper}>

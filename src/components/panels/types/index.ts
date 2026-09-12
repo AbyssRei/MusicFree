@@ -1,13 +1,17 @@
 import AddToMusicSheet from "./addToMusicSheet";
+import ArtistSelectPanel from "./artistSelectPanel";
 import AssociateLrc from "./associateLrc";
 import ColorPicker from "./colorPicker";
 import ImportMusicSheet from "./importMusicSheet";
 import MusicItemOptions from "./musicItemOptions";
 import MusicQuality from "./musicQuality";
 import CreateMusicSheet from "./createMusicSheet";
+import PlayById from "./playById";
 import PlayList from "./playList";
 import PlayRate from "./playRate";
 import SearchLrc from "./searchLrc";
+import SearchCover from "./searchCover";
+import CoverOptions from "./coverOptions";
 import SetFontSize from "./setFontSize";
 import SetLyricOffset from "./setLyricOffset";
 import SetUserVariables from "./setUserVariables";
@@ -19,16 +23,22 @@ import ImageViewer from "./imageViewer";
 import MusicComment from "./musicComment";
 import MusicItemLyricOptions from "./musicItemLyricOptions";
 import EditMusicSheetInfo from "./editMusicSheetInfo";
+import QualityTranslation from "./qualityTranslation";
+import MusicMetadataSettings from "./musicMetadataSettings";
 
 export default {
     /** 加入歌单 */
     AddToMusicSheet,
+    /** 歌手选择 */
+    ArtistSelectPanel,
     /** 歌曲选项 */
     MusicItemOptions,
     /** 新建歌单 */
     CreateMusicSheet,
     /** 导入歌单 */
     ImportMusicSheet,
+    /** 通过ID播放 */
+    PlayById,
     /** 当前播放列表 */
     PlayList: PlayList,
     /** 关联歌词 */
@@ -45,6 +55,10 @@ export default {
     SheetTags,
     /** 搜索歌词 */
     SearchLrc,
+    /** 封面操作 */
+    CoverOptions,
+    /** 搜索封面 */
+    SearchCover,
     /** 简单的选择 */
     SimpleSelect,
     /** 颜色选择器 */
@@ -61,4 +75,8 @@ export default {
     MusicComment,
     MusicItemLyricOptions,
     EditMusicSheetInfo,
+    /** 音质翻译 */
+    QualityTranslationPanel: QualityTranslation,
+    /** 音乐标签设置 */
+    MusicMetadataSettingsPanel: MusicMetadataSettings,
 };

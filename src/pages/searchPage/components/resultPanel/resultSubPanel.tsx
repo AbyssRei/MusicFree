@@ -1,13 +1,10 @@
 import Empty from "@/components/base/empty";
-import { fontWeightConst } from "@/constants/uiConst";
-import { useI18N } from "@/core/i18n";
+import PillTabBar from "@/components/base/pillTabBar";
 import PluginManager from "@/core/pluginManager";
-import useColors from "@/hooks/useColors";
-import rpx, { vw } from "@/utils/rpx";
+import { vw } from "@/utils/rpx";
 import { useAtomValue } from "jotai";
 import React, { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Text } from "react-native";
-import { SceneMap, TabBar, TabView } from "react-native-tab-view";
+import { SceneMap, TabView } from "react-native-tab-view";
 import { searchResultsAtom } from "../../store/atoms";
 import { renderMap } from "./results";
 import DefaultResults from "./results/defaultResults";
@@ -49,14 +46,13 @@ function getResultComponent(
         : () => <DefaultResults />;
 }
 
-/** 结果scene */
+/** 结果 scene */
 function getSubRouterScene(
     tab: ICommon.SupportMediaType,
     routes: Array<{ key: string; title: string }>,
 ) {
     const scene: Record<string, React.FC> = {};
     routes.forEach(r => {
-        // todo: 是否声明不可搜索
         scene[r.key] = getResultComponent(tab, r.key, r.title);
     });
     return SceneMap(scene);
@@ -64,19 +60,23 @@ function getSubRouterScene(
 
 function ResultSubPanel(props: IResultSubPanelProps) {
     const [index, setIndex] = useState(0);
-    const colors = useColors();
-    const { t } = useI18N();
-
+    // Do not over-memoize: plugins can load/enable after mount.
     const routes = PluginManager.getSortedSearchablePlugins(props.tab).map(
         _ => ({
             key: _.hash,
             title: _.name,
         }),
     );
+    const routeKey = routes.map(r => r.key).join("|");
     const renderScene = useMemo(
         () => getSubRouterScene(props.tab, routes),
-        [props.tab],
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- rebuild when plugin set changes
+        [props.tab, routeKey],
     );
+
+    const safeIndex = routes.length
+        ? Math.min(index, routes.length - 1)
+        : 0;
 
     if (!routes.length) {
         return <Empty />;
@@ -86,39 +86,15 @@ function ResultSubPanel(props: IResultSubPanelProps) {
         <TabView
             lazy
             navigationState={{
-                index,
+                index: safeIndex,
                 routes,
             }}
-            renderTabBar={_ => (
-                <TabBar
-                    {..._}
-                    scrollEnabled
-                    style={{
-                        backgroundColor: "transparent",
-                        shadowColor: "transparent",
-                        borderColor: "transparent",
-                    }}
-                    inactiveColor={colors.text}
-                    activeColor={colors.primary}
-                    tabStyle={{
-                        width: "auto",
-                    }}
-                    renderIndicator={() => null}
-                    pressColor="transparent"
-                    renderLabel={({ route, focused, color }) => (
-                        <Text
-                            numberOfLines={1}
-                            style={{
-                                width: rpx(140),
-                                fontWeight: focused
-                                    ? fontWeightConst.bolder
-                                    : fontWeightConst.medium,
-                                color,
-                                textAlign: "center",
-                            }}>
-                            {route.title ?? `(${t("common.unknownName")})`}
-                        </Text>
-                    )}
+            renderTabBar={() => (
+                <PillTabBar
+                    routes={routes}
+                    index={safeIndex}
+                    onIndexChange={setIndex}
+                    variant="pill"
                 />
             )}
             renderScene={renderScene}

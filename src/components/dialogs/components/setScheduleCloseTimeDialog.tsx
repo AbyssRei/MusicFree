@@ -1,11 +1,12 @@
 import React, { useState } from "react";
-import rpx from "@/utils/rpx";
+import rpx, { fontRpx } from "@/utils/rpx";
 import { StyleSheet, View } from "react-native";
 import ThemeText from "@/components/base/themeText";
 import { hideDialog } from "../useDialog";
 import Dialog from "./base";
 import Input from "@/components/base/input";
 import useColors from "@/hooks/useColors";
+import useHasCustomBackground from "@/hooks/useHasCustomBackground";
 import { useI18N } from "@/core/i18n";
 import PersistStatus from "@/utils/persistStatus";
 
@@ -20,6 +21,7 @@ export default function SetScheduleCloseTimeDialog(
     const [timeInput, setTimeInput] = useState("");
     
     const colors = useColors();
+    const hasCustomBackground = useHasCustomBackground();
     const { t } = useI18N();
 
     // Get last custom time as placeholder
@@ -47,26 +49,35 @@ export default function SetScheduleCloseTimeDialog(
         hideDialog();
     };
 
-    const inputStyles = {
-        backgroundColor: colors.card,
-        borderColor: colors.divider,
-        color: colors.text,
-    };
-
-    const containerStyles = {
-        backgroundColor: colors.backdrop,
+    // Avoid colors.backdrop on Content — under custom wallpaper it is a
+    // heavy black panel (rgba(0,0,0,0.62)) nested inside the dialog shell.
+    const inputShellStyle = {
+        borderColor: hasCustomBackground ? "transparent" : colors.divider,
+        borderWidth: hasCustomBackground ? 0 : rpx(2),
+        backgroundColor: hasCustomBackground
+            ? colors.surface
+            : colors.card,
+        elevation: hasCustomBackground ? 0 : 2,
+        shadowOpacity: hasCustomBackground ? 0 : 0.1,
+        shadowColor: hasCustomBackground ? "transparent" : "#000",
     };
 
     return (
         <Dialog onDismiss={hideDialog}>
             <Dialog.Title>{t("dialog.setScheduleCloseTime.title")}</Dialog.Title>
-            <Dialog.Content style={[style.dialogContent, containerStyles]}>
+            <Dialog.Content style={style.dialogContent}>
                 <View style={style.inputSection}>
                     <View style={style.inputRow}>
-                        <View style={[style.inputContainer, { borderColor: colors.divider, backgroundColor: colors.card }]}>
+                        <View style={[style.inputContainer, inputShellStyle]}>
                             <Input
                                 hasHorizontalPadding={false}
-                                style={[style.textInput, inputStyles]}
+                                style={[
+                                    style.textInput,
+                                    {
+                                        backgroundColor: "transparent",
+                                        color: colors.text,
+                                    },
+                                ]}
                                 value={timeInput}
                                 onChangeText={text => {
                                     // Only allow numbers
@@ -131,7 +142,6 @@ const style = StyleSheet.create({
     },
     inputContainer: {
         flex: 1,
-        borderWidth: rpx(2),
         borderRadius: rpx(8),
         paddingHorizontal: rpx(16),
         paddingVertical: rpx(4),
@@ -141,12 +151,10 @@ const style = StyleSheet.create({
             width: 0,
             height: rpx(2),
         },
-        shadowOpacity: 0.1,
         shadowRadius: rpx(4),
-        elevation: 2,
     },
     textInput: {
-        fontSize: rpx(28),
+        fontSize: fontRpx(28),
         includeFontPadding: false,
         paddingVertical: rpx(12),
         borderWidth: 0,
@@ -158,14 +166,14 @@ const style = StyleSheet.create({
         paddingHorizontal: rpx(8),
     },
     unitText: {
-        fontSize: rpx(28),
+        fontSize: fontRpx(28),
         fontWeight: "500",
     },
     hintContainer: {
         paddingHorizontal: rpx(4),
     },
     hintText: {
-        lineHeight: rpx(32),
+        lineHeight: fontRpx(32),
         textAlign: "center",
     },
 });

@@ -2,9 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import {
     BackHandler,
     DeviceEventEmitter,
+    Modal,
     NativeEventSubscription,
     Pressable,
     StyleSheet,
+    TouchableWithoutFeedback,
+    View,
     ViewStyle,
 } from "react-native";
 
@@ -12,7 +15,6 @@ import Animated, {
     Easing,
     EasingFunction,
     runOnJS,
-    useAnimatedReaction,
     useAnimatedStyle,
     useSharedValue,
     withTiming,
@@ -20,7 +22,6 @@ import Animated, {
 import useColors from "@/hooks/useColors";
 import { panelInfoStore } from "../usePanel";
 import { vh } from "@/utils/rpx.ts";
-import useOrientation from "@/hooks/useOrientation.ts";
 
 const ANIMATION_EASING: EasingFunction = Easing.out(Easing.exp);
 const ANIMATION_DURATION = 250;
@@ -31,174 +32,245 @@ const timingConfig = {
 };
 
 interface IPanelFullScreenProps {
-    // 有遮罩
     hasMask?: boolean;
-    // 内容
     children?: React.ReactNode;
-    // 内容区样式
     containerStyle?: ViewStyle;
-
     animationType?: "SlideToTop" | "Scale";
+    /**
+     * 全屏唤醒层点击回调（MV 播放器等需要）。
+     * 该层渲染在 Modal 窗口最顶层、不受动画/子层 transform 影响，
+     * 避免被视频 SurfaceView / 动画容器抢走触摸。
+     */
+    fullscreenTapHandler?: () => void;
+    /** 全屏唤醒层是否禁用（控件可见时禁用，避免挡住按钮）。 */
+    fullscreenTapDisabled?: boolean;
+    /**
+     * 监听的关闭事件。普通面板使用 hidePanel，独立宿主可使用自己的
+     * 事件，避免关闭时修改通用 panelInfoStore。
+     */
+    closeEventName?: string;
+    /** Modal 退出动画完成后的卸载回调。 */
+    onClosed?: () => void;
 }
 
+/**
+ * Fullscreen panel rendered in its own Modal window.  Keeping the panel out of
+ * the native-stack sibling tree is what makes native scrolling and controls
+ * receive the same hit tests as the pixels drawn on screen on Android/Fabric.
+ */
 export default function (props: IPanelFullScreenProps) {
     const {
         hasMask,
         containerStyle,
         children,
         animationType = "SlideToTop",
+        fullscreenTapHandler,
+        fullscreenTapDisabled,
+        closeEventName = "hidePanel",
+        onClosed,
     } = props;
     const snapPoint = useSharedValue(0);
 
     const colors = useColors();
 
-    const backHandlerRef = useRef<NativeEventSubscription>();
-
+    const backHandlerRef = useRef<NativeEventSubscription | null>(null);
     const hideCallbackRef = useRef<Function[]>([]);
+    const closingRef = useRef(false);
 
-    const orientation = useOrientation();
-    const windowHeight = useMemo(() => vh(100), [orientation]);
+    const windowHeight = useMemo(() => vh(100), []);
+
+    const unmountPanel = useCallback(() => {
+        closingRef.current = false;
+        const callbacks = hideCallbackRef.current.slice();
+        hideCallbackRef.current = [];
+        if (callbacks.length > 0) {
+            callbacks.forEach(cb => cb?.());
+            return;
+        }
+        if (onClosed) {
+            onClosed();
+            return;
+        }
+        panelInfoStore.setValue({
+            name: null,
+            payload: null,
+        });
+    }, [onClosed]);
+
+    const closePanel = useCallback(() => {
+        if (closingRef.current) {
+            return;
+        }
+        closingRef.current = true;
+        snapPoint.value = withTiming(0, timingConfig, finished => {
+            if (finished) {
+                runOnJS(unmountPanel)();
+            } else {
+                closingRef.current = false;
+            }
+        });
+    }, [snapPoint, unmountPanel]);
 
     useEffect(() => {
-        snapPoint.value = 1;
+        closingRef.current = false;
+        snapPoint.value = withTiming(1, timingConfig);
 
         if (backHandlerRef.current) {
             backHandlerRef.current?.remove();
-            backHandlerRef.current = undefined;
+            backHandlerRef.current = null;
         }
         backHandlerRef.current = BackHandler.addEventListener(
             "hardwareBackPress",
             () => {
-                snapPoint.value = 0;
+                closePanel();
                 return true;
             },
         );
 
         const listenerSubscription = DeviceEventEmitter.addListener(
-            "hidePanel",
+            closeEventName,
             (callback?: () => void) => {
                 if (callback) {
                     hideCallbackRef.current.push(callback);
                 }
-                snapPoint.value = 0;
+                closePanel();
             },
         );
 
         return () => {
             if (backHandlerRef.current) {
                 backHandlerRef.current?.remove();
-                backHandlerRef.current = undefined;
+                backHandlerRef.current = null;
             }
             listenerSubscription.remove();
         };
+        // The listener is bound once for the mounted modal. Its event name is
+        // part of the host contract and must not change while it is visible.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-
-    const maskAnimated = useAnimatedStyle(() => {
-        return {
-            opacity: withTiming(snapPoint.value * 0.5, timingConfig),
-        };
-    });
 
     const panelAnimated = useAnimatedStyle(() => {
         if (animationType === "SlideToTop") {
             return {
                 transform: [
                     {
-                        translateY: withTiming(
-                            (1 - snapPoint.value) * windowHeight,
-                            timingConfig,
-                        ),
+                        translateY: (1 - snapPoint.value) * windowHeight,
                     },
                 ],
-            };
-        } else {
-            return {
-                transform: [
-                    {
-                        scale: withTiming(
-                            0.3 + snapPoint.value * 0.7,
-                            timingConfig,
-                        ),
-                    },
-                ],
-                opacity: withTiming(snapPoint.value, timingConfig),
             };
         }
+        return {
+            transform: [
+                {
+                    scale: 0.3 + snapPoint.value * 0.7,
+                },
+            ],
+            opacity: snapPoint.value,
+        };
     });
 
-    const unmountPanel = useCallback(() => {
-        panelInfoStore.setValue({
-            name: null,
-            payload: null,
-        });
-        hideCallbackRef.current.forEach(cb => cb?.());
-    }, []);
+    const maskAnimated = useAnimatedStyle(() => ({
+        opacity: snapPoint.value * 0.5,
+    }));
 
-    useAnimatedReaction(
-        () => snapPoint.value,
-        (result, prevResult) => {
-            if (prevResult && result < prevResult && result === 0) {
-                runOnJS(unmountPanel)();
-            }
-        },
-        [],
-    );
     return (
-        <>
-            {hasMask ? (
-                <Pressable
-                    style={style.maskWrapper}
-                    onPress={() => {
-                        snapPoint.value = withTiming(0, timingConfig);
-                    }}>
-                    <Animated.View
-                        style={[style.maskWrapper, style.mask, maskAnimated]}
-                    />
-                </Pressable>
-            ) : null}
-            <Animated.View
-                pointerEvents={hasMask ? "box-none" : undefined}
-                style={[
-                    style.wrapper,
-                    !hasMask
-                        ? {
-                            backgroundColor: colors.background,
+        <Modal
+            visible
+            transparent
+            animationType="none"
+            statusBarTranslucent
+            navigationBarTranslucent
+            presentationStyle="overFullScreen"
+            onRequestClose={closePanel}>
+            <View style={style.rootHost} collapsable={false}>
+                {hasMask ? (
+                    <TouchableWithoutFeedback
+                        accessibilityRole="button"
+                        accessibilityLabel="关闭面板"
+                        onPress={closePanel}>
+                        <Animated.View
+                            collapsable={false}
+                            style={[style.mask, maskAnimated]}
+                        />
+                    </TouchableWithoutFeedback>
+                ) : null}
+                <Animated.View
+                    collapsable={false}
+                    pointerEvents="auto"
+                    style={[
+                        style.wrapper,
+                        !hasMask
+                            ? {
+                                backgroundColor: colors.background,
+                            }
+                            : null,
+                        panelAnimated,
+                        containerStyle,
+                    ]}>
+                    {children}
+                </Animated.View>
+                {fullscreenTapHandler ? (
+                    <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="显示播放器控件"
+                        onPress={fullscreenTapHandler}
+                        pointerEvents={
+                            fullscreenTapDisabled ? "none" : "auto"
                         }
-                        : null,
-                    panelAnimated,
-                    containerStyle,
-                ]}>
-                {children}
-            </Animated.View>
-        </>
+                        // 渲染在 Modal 窗口最顶层：不受 wrapper 的 Scale
+                        // transform 影响，位于所有子层（含视频 SurfaceView）
+                        // 之后，Android 命中测试优先。
+                        style={style.fullscreenTapLayer}
+                    />
+                ) : null}
+            </View>
+        </Modal>
     );
 }
 
 const style = StyleSheet.create({
-    maskWrapper: {
+    rootHost: {
         position: "absolute",
-        width: "100%",
-        height: "100%",
-        top: 0,
         left: 0,
+        top: 0,
         right: 0,
         bottom: 0,
-        zIndex: 15000,
+        width: "100%",
+        height: "100%",
     },
     mask: {
+        position: "absolute",
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: "100%",
+        height: "100%",
         backgroundColor: "#000",
-        opacity: 0.5,
+        zIndex: 0,
     },
     wrapper: {
         position: "absolute",
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
         width: "100%",
         height: "100%",
-        bottom: 0,
-        right: 0,
-        zIndex: 15010,
+        zIndex: 1,
+        elevation: 16,
         flexDirection: "column",
     },
-    kbContainer: {
-        zIndex: 15010,
+    fullscreenTapLayer: {
+        position: "absolute",
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: "100%",
+        height: "100%",
+        zIndex: 2,
+        elevation: 32,
+        backgroundColor: "transparent",
     },
 });

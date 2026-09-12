@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export default function (pluginHash: string, tag: ICommon.IUnique) {
     const [sheets, setSheets] = useState<IMusic.IMusicSheetItemBase[]>([]);
     const [requestState, setRequestState] = useState(RequestStateCode.IDLE);
-    const currentTagRef = useRef<string>();
+    const currentTagRef = useRef<string | null>(null);
     const pageRef = useRef(0);
 
     const query = useCallback(async () => {
@@ -58,11 +58,11 @@ export default function (pluginHash: string, tag: ICommon.IUnique) {
         } catch {
             setRequestState(RequestStateCode.ERROR);
         }
-    }, [tag, requestState]);
+    }, [tag, requestState, pluginHash]);
 
     useEffect(() => {
         query();
-    }, [tag]);
+    }, [tag, query]);
 
 
     return [query, sheets, requestState] as const;

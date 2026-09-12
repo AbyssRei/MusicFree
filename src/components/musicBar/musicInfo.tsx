@@ -1,5 +1,5 @@
 import React, { memo, useLayoutEffect, useMemo } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import rpx from "@/utils/rpx";
 import FastImage from "../base/fastImage";
 import { ImgAsset } from "@/constants/assetsConst";
@@ -8,7 +8,7 @@ import ThemeText from "../base/themeText";
 import useColors from "@/hooks/useColors";
 import { ROUTE_PATH, useNavigate } from "@/core/router";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import TrackPlayer, { usePlayList } from "@/core/trackPlayer";
+import TrackPlayer from "@/core/trackPlayer";
 import Animated, {
     SharedValue,
     runOnJS,
@@ -16,18 +16,21 @@ import Animated, {
     useSharedValue,
     withTiming,
 } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { timingConfig } from "@/constants/commonConst";
+import { resolveArtwork } from "@/utils/artwork";
+import { useMediaExtraProperty } from "@/utils/mediaExtra";
 
 interface IBarMusicItemProps {
     musicItem: IMusic.IMusicItem | null;
     activeIndex: number; // 当前展示的是0/1/2
     transformSharedValue: SharedValue<number>;
 }
-function _BarMusicItem(props: IBarMusicItemProps) {
+function BarMusicItemView(props: IBarMusicItemProps) {
     const { musicItem, activeIndex, transformSharedValue } = props;
     const colors = useColors();
-    const safeAreaInsets = useSafeAreaInsets();
+    // Subscribe so minibar updates when cover is associated/restored
+    useMediaExtraProperty(musicItem, "associatedArtwork");
+    const displayArtwork = resolveArtwork(musicItem);
 
     const animatedStyles = useAnimatedStyle(() => {
         return {
@@ -43,41 +46,45 @@ function _BarMusicItem(props: IBarMusicItemProps) {
         <Animated.View
             style={[
                 styles.container,
-                {
-                    paddingLeft: rpx(24) + safeAreaInsets.left,
-                },
+                // Parent MusicBar already applies horizontal safe-area margins.
+                // Do not add safeAreaInsets.left again or text/controls drift apart.
+                styles.containerPadding,
                 animatedStyles,
             ]}>
-            <FastImage
-                style={styles.artworkImg}
-                source={musicItem.artwork}
-                placeholderSource={ImgAsset.albumDefault}
-            />
-            <Text
-                ellipsizeMode="tail"
-                accessible={false}
-                style={styles.textWrapper}
-                numberOfLines={1}>
-                <ThemeText fontSize="content" fontColor="musicBarText">
+            <View collapsable={false}>
+                <FastImage
+                    key={displayArtwork ?? "default"}
+                    style={styles.artworkImg}
+                    source={displayArtwork}
+                    placeholderSource={ImgAsset.albumDefault}
+                />
+            </View>
+            <View accessible={false} style={styles.textWrapper}>
+                <ThemeText
+                    fontSize="subTitle"
+                    fontWeight="semibold"
+                    fontColor="musicBarText"
+                    numberOfLines={1}>
                     {musicItem?.title}
                 </ThemeText>
                 {musicItem?.artist && (
                     <ThemeText
                         fontSize="description"
+                        numberOfLines={1}
+                        style={styles.artist}
                         color={Color(colors.musicBarText)
-                            .alpha(0.6)
+                            .alpha(0.62)
                             .toString()}>
-                        {" "}
-                        -{musicItem.artist}
+                        {musicItem.artist}
                     </ThemeText>
                 )}
-            </Text>
+            </View>
         </Animated.View>
     );
 }
 
 const BarMusicItem = memo(
-    _BarMusicItem,
+    BarMusicItemView,
     (prev, curr) =>
         prev.musicItem === curr.musicItem &&
         prev.activeIndex === curr.activeIndex,
@@ -90,15 +97,26 @@ const styles = StyleSheet.create({
         alignItems: "center",
         position: "absolute",
     },
+    containerPadding: {
+        paddingLeft: rpx(24),
+        paddingRight: rpx(12),
+    },
     textWrapper: {
-        flexGrow: 1,
+        flex: 1,
         flexShrink: 1,
+        justifyContent: "center",
+        // Leave room so long titles don't paint under the play controls.
+        minWidth: 0,
     },
     artworkImg: {
-        width: rpx(96),
-        height: rpx(96),
-        borderRadius: rpx(48),
-        marginRight: rpx(24),
+        width: rpx(76),
+        height: rpx(76),
+        borderRadius: rpx(16),
+        marginRight: rpx(18),
+        flexShrink: 0,
+    },
+    artist: {
+        marginTop: rpx(7),
     },
 });
 
@@ -118,7 +136,6 @@ function skipMusicItem(direction: number) {
 export default function MusicInfo(props: IMusicInfoProps) {
     const { musicItem } = props;
     const navigate = useNavigate();
-    const playLists = usePlayList();
     const siblingMusicItems = useMemo(() => {
         if (!musicItem) {
             return {
@@ -130,7 +147,7 @@ export default function MusicInfo(props: IMusicInfoProps) {
             prev: TrackPlayer.previousMusic,
             next: TrackPlayer.nextMusic,
         };
-    }, [musicItem, playLists]);
+    }, [musicItem]);
 
     // +- 1
     const transformSharedValue = useSharedValue(0);
@@ -145,7 +162,7 @@ export default function MusicInfo(props: IMusicInfoProps) {
 
     useLayoutEffect(() => {
         transformSharedValue.value = 0;
-    }, [musicItem]);
+    }, [musicItem, transformSharedValue]);
 
     const panGesture = Gesture.Pan()
         .minPointers(1)

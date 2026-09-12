@@ -8,11 +8,13 @@ import globalStyle from "@/constants/globalStyle";
 import { useI18N } from "@/core/i18n";
 import LyricUtil from "@/native/lyricUtil";
 import NativeUtils from "@/native/utils";
+import downloadNotificationManager from "@/core/downloadNotificationManager";
 import rpx from "@/utils/rpx";
+import { devLog } from "@/utils/log";
 import React, { useEffect, useRef, useState } from "react";
 import { AppState, StyleSheet } from "react-native";
 
-type IPermissionTypes = "floatingWindow" | "fileStorage";
+type IPermissionTypes = "floatingWindow" | "fileStorage" | "notification";
 
 export default function Permissions() {
     const appState = useRef(AppState.currentState);
@@ -21,28 +23,35 @@ export default function Permissions() {
     >({
         floatingWindow: false,
         fileStorage: false,
+        notification: false,
         // background: false,
     });
     const { t } = useI18N();
 
     async function checkPermission(type?: IPermissionTypes) {
-        let newPermission = {
-            ...permissions,
-        };
+        const newPermissions: Partial<Record<IPermissionTypes, boolean>> = {};
+        
         if (!type || type === "floatingWindow") {
             const hasPermission = await LyricUtil.checkSystemAlertPermission();
-            newPermission.floatingWindow = hasPermission;
+            newPermissions.floatingWindow = hasPermission;
         }
         if (!type || type === "fileStorage") {
             const hasPermission = await NativeUtils.checkStoragePermission();
-            console.log("HAS", hasPermission);
-            newPermission.fileStorage = hasPermission;
+            devLog("info", "📁[权限页面] 存储权限检查", { hasPermission });
+            newPermissions.fileStorage = hasPermission;
+        }
+        if (!type || type === "notification") {
+            const hasPermission = await downloadNotificationManager.checkNotificationPermission();
+            newPermissions.notification = hasPermission;
         }
         // if (!type || type === 'background') {
 
         // }
 
-        setPermissions(newPermission);
+        setPermissions(prevPermissions => ({
+            ...prevPermissions,
+            ...newPermissions,
+        }));
     }
 
     useEffect(() => {
@@ -75,27 +84,69 @@ export default function Permissions() {
             </ThemeText>
             <ListItem
                 withHorizontalPadding
-                heightType="big"
-                onPress={() => {
-                    LyricUtil.requestSystemAlertPermission();
-                }}>
+                heightType="big">
                 <ListItem.Content
                     title={t("permissionSetting.floatWindowPermission")}
                     description={t("permissionSetting.floatWindowPermissionDescription")}
                 />
-                <ThemeSwitch value={permissions.floatingWindow} />
+                <ThemeSwitch 
+                    value={permissions.floatingWindow} 
+                    onValueChange={async (newValue) => {
+                        if (newValue) {
+                            // 请求开启权限
+                            LyricUtil.requestSystemAlertPermission();
+                            // 请求完成后立即更新状态
+                            setTimeout(() => {
+                                checkPermission("floatingWindow");
+                            }, 500);
+                        }
+                        // 如果是关闭，Android 系统不支持应用直接关闭权限
+                    }}
+                />
             </ListItem>
             <ListItem
                 withHorizontalPadding
-                heightType="big"
-                onPress={() => {
-                    NativeUtils.requestStoragePermission();
-                }}>
+                heightType="big">
                 <ListItem.Content
                     title={t("permissionSetting.fileReadWritePermission")}
                     description={t("permissionSetting.fileReadWritePermissionDescription")}
                 />
-                <ThemeSwitch value={permissions.fileStorage} />
+                <ThemeSwitch 
+                    value={permissions.fileStorage} 
+                    onValueChange={async (newValue) => {
+                        if (newValue) {
+                            // 请求开启权限
+                            NativeUtils.requestStoragePermission();
+                            // 请求完成后立即更新状态
+                            setTimeout(() => {
+                                checkPermission("fileStorage");
+                            }, 500);
+                        }
+                        // 如果是关闭，Android 系统不支持应用直接关闭权限
+                    }}
+                />
+            </ListItem>
+            <ListItem
+                withHorizontalPadding
+                heightType="big">
+                <ListItem.Content
+                    title={t("permissionSetting.notificationPermission")}
+                    description={t("permissionSetting.notificationPermissionDescription")}
+                />
+                <ThemeSwitch 
+                    value={permissions.notification} 
+                    onValueChange={async (newValue) => {
+                        if (newValue) {
+                            // 请求开启权限
+                            await downloadNotificationManager.requestNotificationPermission();
+                            // 请求完成后立即更新状态
+                            setTimeout(() => {
+                                checkPermission("notification");
+                            }, 500);
+                        }
+                        // 如果是关闭，Android 系统不支持应用直接关闭权限
+                    }}
+                />
             </ListItem>
             {/* <ListItem withHorizontalPadding heightType="big">
                 <ListItem.Content

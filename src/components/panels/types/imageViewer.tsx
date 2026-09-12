@@ -1,5 +1,5 @@
 import React from "react";
-import { Image, StyleSheet } from "react-native";
+import { Image, StyleSheet, View } from "react-native";
 import rpx, { vh, vw } from "@/utils/rpx";
 import Toast from "@/utils/toast";
 import useOrientation from "@/hooks/useOrientation.ts";
@@ -24,26 +24,19 @@ export default function ImageViewer(props: IImageViewerProps) {
             hasMask
             animationType="Scale"
             containerStyle={styles.container}>
-            <Image
-                style={
-                    orientation === "vertical"
-                        ? {
-                            width: vw(100),
-                            minHeight: vw(100),
-                            maxHeight: vh(100),
-                            resizeMode: "cover",
-                        }
-                        : {
-                            maxWidth: vw(80),
-                            height: vh(60),
-                            minWidth: vh(60),
-                            resizeMode: "cover",
-                        }
-                }
-                source={{
-                    uri: url,
-                }}
-            />
+            <View collapsable={false}>
+                <Image
+                    style={[
+                        styles.image,
+                        orientation === "vertical"
+                            ? styles.imageVertical
+                            : styles.imageHorizontal,
+                    ]}
+                    source={{
+                        uri: url,
+                    }}
+                />
+            </View>
             <Button
                 text={t("panel.imageViewer.saveImage")}
                 type="primary"
@@ -71,6 +64,19 @@ const styles = StyleSheet.create({
         justifyContent: "center",
         alignItems: "center",
         gap: rpx(48),
+    },
+    image: {
+        resizeMode: "cover",
+    },
+    imageVertical: {
+        width: vw(100),
+        minHeight: vw(100),
+        maxHeight: vh(100),
+    },
+    imageHorizontal: {
+        maxWidth: vw(80),
+        height: vh(60),
+        minWidth: vh(60),
     },
     button: {
         marginHorizontal: rpx(24),

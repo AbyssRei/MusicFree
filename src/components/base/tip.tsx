@@ -8,7 +8,7 @@ import Animated, {
     runOnJS,
 } from "react-native-reanimated";
 import Portal from "./portal";
-import rpx from "@/utils/rpx";
+import rpx, { fontRpx } from "@/utils/rpx";
 import useColors from "@/hooks/useColors";
 import { timingConfig } from "@/constants/commonConst";
 
@@ -93,14 +93,11 @@ const calculateTipPosition = (
 const Triangle = ({ size, color, style }: { size: number; color: string; style?: any }) => (
     <View
         style={[
+            styles.triangle,
             {
-                width: 0,
-                height: 0,
                 borderLeftWidth: size / 2,
                 borderRightWidth: size / 2,
                 borderBottomWidth: size,
-                borderLeftColor: "transparent",
-                borderRightColor: "transparent",
                 borderBottomColor: color,
             },
             style,
@@ -300,11 +297,15 @@ const styles = StyleSheet.create({
         top: -1000,
     },
     tipText: {
-        fontSize: rpx(24),
-        lineHeight: rpx(32),
+        fontSize: fontRpx(24),
+        lineHeight: fontRpx(32),
         textAlign: "center",
     },
     triangle: {
         position: "absolute",
+        width: 0,
+        height: 0,
+        borderLeftColor: "transparent",
+        borderRightColor: "transparent",
     },
 });

@@ -4,6 +4,7 @@ import rpx from "@/utils/rpx";
 import ThemeText from "./themeText";
 import useColors from "@/hooks/useColors";
 import IconButton from "./iconButton";
+import useCardStyle from "@/hooks/useCardStyle";
 
 interface IChipProps {
     containerStyle?: StyleProp<ViewStyle>;
@@ -14,6 +15,11 @@ interface IChipProps {
 export default function Chip(props: IChipProps) {
     const { containerStyle, children, onPress, onClose } = props;
     const colors = useColors();
+    const cardStyle = useCardStyle({
+        borderWidth: StyleSheet.hairlineWidth,
+        elevation: 1,
+        shadowOpacity: 0.06,
+    });
 
     return (
         <Pressable
@@ -21,8 +27,9 @@ export default function Chip(props: IChipProps) {
             style={[
                 styles.container,
                 {
-                    backgroundColor: colors.placeholder,
+                    backgroundColor: colors.surface,
                 },
+                cardStyle,
                 containerStyle,
             ]}>
             {typeof children === "string" ? (
@@ -47,9 +54,16 @@ const styles = StyleSheet.create({
         height: rpx(56),
         paddingHorizontal: rpx(18),
         borderRadius: rpx(28),
+        // Border/elevation come from useCardStyle so custom wallpaper
+        // does not get a double dark ring.
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
+        shadowOffset: {
+            width: 0,
+            height: rpx(1),
+        },
+        shadowRadius: rpx(3),
     },
     icon: {
         marginLeft: rpx(8),

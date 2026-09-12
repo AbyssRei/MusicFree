@@ -1,7 +1,10 @@
 import React, { ReactNode, useEffect, useMemo, useRef } from "react";
 import {
     BackHandler,
+    Dimensions,
+    Keyboard,
     NativeEventSubscription,
+    Platform,
     StyleProp,
     StyleSheet,
     TouchableOpacity,
@@ -17,11 +20,13 @@ import Animated, {
 } from "react-native-reanimated";
 import { timingConfig } from "@/constants/commonConst";
 import useColors from "@/hooks/useColors";
+import useHasCustomBackground from "@/hooks/useHasCustomBackground";
 import ThemeText from "@/components/base/themeText";
 import Divider from "@/components/base/divider";
 import { fontSizeConst } from "@/constants/uiConst";
 import { ScrollView } from "react-native-gesture-handler";
 import useOrientation from "@/hooks/useOrientation.ts";
+import Config from "@/core/appConfig";
 
 interface IDialogProps {
     onDismiss?: () => void;
@@ -32,9 +37,13 @@ function Dialog(props: IDialogProps) {
     const { children, onDismiss } = props;
 
     const sharedShowValue = useSharedValue(0);
+    const keyboardHeight = useSharedValue(0);
     const colors = useColors();
-    const backHandlerRef = useRef<NativeEventSubscription>();
+    const hasCustomBackground = useHasCustomBackground();
+    const backHandlerRef = useRef<NativeEventSubscription | null>(null);
     const orientation = useOrientation();
+    const keyboardAvoidMode =
+        Config.getConfig("basic.keyboardAvoidMode") ?? "auto";
 
     // 对话框宽度
     const dialogContainerStyle: ViewStyle =
@@ -50,7 +59,7 @@ function Dialog(props: IDialogProps) {
         sharedShowValue.value = 1;
         if (backHandlerRef.current) {
             backHandlerRef.current?.remove();
-            backHandlerRef.current = undefined;
+            backHandlerRef.current = null;
         }
         backHandlerRef.current = BackHandler.addEventListener(
             "hardwareBackPress",
@@ -60,14 +69,62 @@ function Dialog(props: IDialogProps) {
             },
         );
 
+        // 监听键盘事件
+        const keyboardShowEvent =
+            Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+        const keyboardHideEvent =
+            Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+        const keyboardShowListener = Keyboard.addListener(
+            keyboardShowEvent,
+            e => {
+                if (keyboardAvoidMode === "off") {
+                    keyboardHeight.value = withTiming(0, {
+                        duration: Platform.OS === "ios" ? 250 : 150,
+                    });
+                    return;
+                }
+                const windowHeight = Dimensions.get("window").height;
+                const keyboardTopY =
+                    typeof e.endCoordinates.screenY === "number"
+                        ? e.endCoordinates.screenY
+                        : windowHeight - e.endCoordinates.height;
+                const effectiveKeyboardHeight = Math.max(
+                    0,
+                    windowHeight - keyboardTopY,
+                );
+                const targetHeight =
+                    keyboardAvoidMode === "manual"
+                        ? e.endCoordinates.height
+                        : Math.min(
+                            e.endCoordinates.height,
+                            effectiveKeyboardHeight,
+                        );
+                keyboardHeight.value = withTiming(targetHeight / 2, {
+                    duration: Platform.OS === "ios" ? 250 : 150,
+                });
+            },
+        );
+
+        const keyboardHideListener = Keyboard.addListener(
+            keyboardHideEvent,
+            () => {
+                keyboardHeight.value = withTiming(0, {
+                    duration: Platform.OS === "ios" ? 250 : 150,
+                });
+            },
+        );
+
         return () => {
             sharedShowValue.value = 0;
             if (backHandlerRef.current) {
                 backHandlerRef.current?.remove();
-                backHandlerRef.current = undefined;
+                backHandlerRef.current = null;
             }
+            keyboardShowListener.remove();
+            keyboardHideListener.remove();
         };
-    }, []);
+    }, [onDismiss, sharedShowValue, keyboardHeight]);
 
     const containerStyle = useAnimatedStyle(() => {
         return {
@@ -87,6 +144,9 @@ function Dialog(props: IDialogProps) {
                         timingConfig.animationFast,
                     ),
                 },
+                {
+                    translateY: -keyboardHeight.value,
+                },
             ],
         };
     });
@@ -105,8 +165,19 @@ function Dialog(props: IDialogProps) {
                     containerStyle,
                     scaleAnimationStyle,
                     {
-                        backgroundColor: colors.backdrop,
-                        shadowColor: colors.shadow,
+                        backgroundColor: colors.surfaceElevated,
+                        // Custom wallpaper: no dark outer ring (border + elevation).
+                        borderWidth: hasCustomBackground
+                            ? 0
+                            : StyleSheet.hairlineWidth,
+                        borderColor: hasCustomBackground
+                            ? "transparent"
+                            : colors.border,
+                        shadowColor: hasCustomBackground
+                            ? "transparent"
+                            : colors.shadow,
+                        shadowOpacity: hasCustomBackground ? 0 : 0.5,
+                        elevation: hasCustomBackground ? 0 : 5,
                     },
                 ]}>
                 {children}
@@ -131,7 +202,7 @@ function Title(props: IDialogTitleProps) {
                 {typeof children === "string" || stringContent ? (
                     <ThemeText
                         fontSize="title"
-                        fontWeight="bold"
+                        fontWeight="semibold"
                         numberOfLines={1}>
                         {children}
                     </ThemeText>
@@ -235,6 +306,8 @@ function BottomButton(props: {
     const { type = "normal", text, style, onPress } = props;
     const colors = useColors();
 
+    const hasCustomBackground = useHasCustomBackground();
+
     return (
         <TouchableOpacity
             activeOpacity={0.6}
@@ -243,11 +316,23 @@ function BottomButton(props: {
                 styles.bottomBtn,
                 {
                     backgroundColor:
-                        type === "normal" ? colors.placeholder : colors.primary,
+                        type === "normal" ? colors.surface : colors.primary,
+                    borderColor:
+                        type === "primary"
+                            ? colors.primary
+                            : hasCustomBackground
+                                ? "transparent"
+                                : colors.border,
+                    borderWidth:
+                        type === "primary" || !hasCustomBackground
+                            ? StyleSheet.hairlineWidth
+                            : 0,
                 },
                 style,
             ]}>
-            <ThemeText color={type === "normal" ? undefined : "white"}>
+            <ThemeText
+                fontWeight="semibold"
+                color={type === "normal" ? undefined : "white"}>
                 {text}
             </ThemeText>
         </TouchableOpacity>
@@ -256,7 +341,8 @@ function BottomButton(props: {
 
 const styles = StyleSheet.create({
     bottomBtn: {
-        borderRadius: rpx(8),
+        borderRadius: rpx(36),
+        borderWidth: StyleSheet.hairlineWidth,
         flex: 1,
         flexShrink: 0,
         justifyContent: "center",
@@ -286,16 +372,13 @@ const styles = StyleSheet.create({
         position: "absolute",
         width: "80%",
         zIndex: 16310,
-        borderRadius: rpx(16),
+        borderRadius: rpx(28),
         backgroundColor: "red",
         shadowOffset: {
             width: 0,
             height: 2,
         },
-        shadowOpacity: 0.5,
         shadowRadius: 4,
-
-        elevation: 5,
     },
 
     defaultFontStyle: {
@@ -306,7 +389,7 @@ const styles = StyleSheet.create({
     titleContainer: {
         height: rpx(88),
         width: "100%",
-        alignItems: "center",
+        alignItems: "flex-start",
         justifyContent: "center",
         flexDirection: "row",
         paddingHorizontal: rpx(24),

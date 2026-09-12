@@ -2,13 +2,18 @@ import useColors from "@/hooks/useColors";
 import useOrientation from "@/hooks/useOrientation";
 import rpx, { vh } from "@/utils/rpx";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Config from "@/core/appConfig";
 import {
     BackHandler,
     DeviceEventEmitter,
-    KeyboardAvoidingView,
+    Dimensions,
+    Keyboard,
+    Modal,
     NativeEventSubscription,
-    Pressable,
+    Platform,
     StyleSheet,
+    TouchableWithoutFeedback,
+    View,
 } from "react-native";
 import Animated, {
     Easing,
@@ -21,7 +26,6 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { panelInfoStore } from "../usePanel";
-import NativeUtils from "@/native/utils";
 
 const ANIMATION_EASING: EasingFunction = Easing.out(Easing.exp);
 const ANIMATION_DURATION = 250;
@@ -36,9 +40,18 @@ interface IPanelBaseProps {
     height?: number;
     // 定位方式
     positionMethod?: "top" | "bottom";
-    renderBody: (loading: boolean) => JSX.Element;
+    renderBody: (loading: boolean) => React.ReactNode;
 }
 
+/**
+ * Bottom sheet panel.
+ *
+ * Panels are rendered in a Modal rather than as a sibling of native-stack.  A
+ * native-stack screen is a native window on Android/Fabric; an absolute React
+ * sibling can therefore be painted above it while still losing the hit test.
+ * Modal gives the panel its own Dialog window, so the dimmer and native
+ * controls (notably Slider and TextInput) share the same touch surface.
+ */
 export default function (props: IPanelBaseProps) {
     const {
         height = vh(60),
@@ -46,39 +59,72 @@ export default function (props: IPanelBaseProps) {
         keyboardAvoidBehavior,
         positionMethod = "bottom",
     } = props;
+    const keyboardAvoidMode =
+        Config.getConfig("basic.keyboardAvoidMode") ?? "auto";
     const snapPoint = useSharedValue(0);
+    const keyboardHeight = useSharedValue(0);
 
     const colors = useColors();
-    const [loading, setLoading] = useState(true); // 是否处于弹出状态
-    const timerRef = useRef<any>();
+    const [loading, setLoading] = useState(true);
+    const timerRef = useRef<any>(null);
     const safeAreaInsets = useSafeAreaInsets();
     const orientation = useOrientation();
     const useAnimatedBase = useMemo(
         () => (orientation === "horizontal" ? rpx(750) : height),
-        [orientation],
+        [orientation, height],
     );
 
-    const backHandlerRef = useRef<NativeEventSubscription>();
-
+    const backHandlerRef = useRef<NativeEventSubscription | null>(null);
     const hideCallbackRef = useRef<Function[]>([]);
+    const closingRef = useRef(false);
+
+    const unmountPanel = useCallback(() => {
+        closingRef.current = false;
+        const callbacks = hideCallbackRef.current.slice();
+        hideCallbackRef.current = [];
+        if (callbacks.length > 0) {
+            callbacks.forEach(cb => cb?.());
+            return;
+        }
+        panelInfoStore.setValue({
+            name: null,
+            payload: null,
+        });
+    }, []);
+
+    const closePanel = useCallback(() => {
+        if (closingRef.current) {
+            return;
+        }
+        closingRef.current = true;
+        snapPoint.value = withTiming(0, timingConfig, finished => {
+            if (finished) {
+                runOnJS(unmountPanel)();
+            } else {
+                // Animation interrupted — allow another close attempt.
+                closingRef.current = false;
+            }
+        });
+    }, [snapPoint, unmountPanel]);
 
     useEffect(() => {
+        closingRef.current = false;
         snapPoint.value = withTiming(1, timingConfig);
 
         timerRef.current = setTimeout(() => {
             if (loading) {
-                // 兜底
                 setLoading(false);
             }
         }, 400);
+
         if (backHandlerRef.current) {
             backHandlerRef.current.remove();
-            backHandlerRef.current = undefined;
+            backHandlerRef.current = null;
         }
         backHandlerRef.current = BackHandler.addEventListener(
             "hardwareBackPress",
             () => {
-                snapPoint.value = withTiming(0, timingConfig);
+                closePanel();
                 return true;
             },
         );
@@ -89,7 +135,54 @@ export default function (props: IPanelBaseProps) {
                 if (callback) {
                     hideCallbackRef.current.push(callback);
                 }
-                snapPoint.value = withTiming(0, timingConfig);
+                closePanel();
+            },
+        );
+
+        const keyboardShowEvent =
+            Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+        const keyboardHideEvent =
+            Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+        const keyboardShowListener = Keyboard.addListener(
+            keyboardShowEvent,
+            e => {
+                if (keyboardAvoidBehavior !== "none") {
+                    if (keyboardAvoidMode === "off") {
+                        keyboardHeight.value = withTiming(0, {
+                            duration: Platform.OS === "ios" ? 250 : 150,
+                        });
+                        return;
+                    }
+                    const windowHeight = Dimensions.get("window").height;
+                    const keyboardTopY =
+                        typeof e.endCoordinates.screenY === "number"
+                            ? e.endCoordinates.screenY
+                            : windowHeight - e.endCoordinates.height;
+                    const effectiveKeyboardHeight = Math.max(
+                        0,
+                        windowHeight - keyboardTopY,
+                    );
+                    const targetHeight =
+                        keyboardAvoidMode === "manual"
+                            ? e.endCoordinates.height
+                            : Math.min(
+                                e.endCoordinates.height,
+                                effectiveKeyboardHeight,
+                            );
+                    keyboardHeight.value = withTiming(targetHeight, {
+                        duration: Platform.OS === "ios" ? 250 : 150,
+                    });
+                }
+            },
+        );
+
+        const keyboardHideListener = Keyboard.addListener(
+            keyboardHideEvent,
+            () => {
+                keyboardHeight.value = withTiming(0, {
+                    duration: Platform.OS === "ios" ? 250 : 150,
+                });
             },
         );
 
@@ -100,42 +193,35 @@ export default function (props: IPanelBaseProps) {
             }
             if (backHandlerRef.current) {
                 backHandlerRef.current?.remove();
-                backHandlerRef.current = undefined;
+                backHandlerRef.current = null;
             }
             listenerSubscription.remove();
+            keyboardShowListener.remove();
+            keyboardHideListener.remove();
         };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const maskAnimated = useAnimatedStyle(() => {
-        return {
-            opacity: snapPoint.value * 0.5,
-        };
-    });
-
     const panelAnimated = useAnimatedStyle(() => {
+        const baseTransform =
+            orientation === "vertical"
+                ? { translateY: (1 - snapPoint.value) * useAnimatedBase }
+                : { translateX: (1 - snapPoint.value) * useAnimatedBase };
+
         return {
-            transform: [
-                orientation === "vertical"
-                    ? {
-                        translateY: (1 - snapPoint.value) * useAnimatedBase,
-                    }
-                    : {
-                        translateX: (1 - snapPoint.value) * useAnimatedBase,
-                    },
-            ],
+            transform: [baseTransform, { translateY: -keyboardHeight.value }],
         };
-    }, [orientation]);
+    }, [orientation, useAnimatedBase]);
+
+    const maskAnimated = useAnimatedStyle(() => ({
+        // Keep the mask opaque for hit testing and animate only its opacity.
+        // This is the same structure used by Dialog and avoids stacking a
+        // static 0.5 opacity with an animated value.
+        opacity: snapPoint.value * 0.5,
+    }));
 
     const mountPanel = useCallback(() => {
         setLoading(false);
-    }, []);
-
-    const unmountPanel = useCallback(() => {
-        panelInfoStore.setValue({
-            name: null,
-            payload: null,
-        });
-        hideCallbackRef.current.forEach(cb => cb?.());
     }, []);
 
     useAnimatedReaction(
@@ -148,73 +234,90 @@ export default function (props: IPanelBaseProps) {
             ) {
                 runOnJS(mountPanel)();
             }
-
-            if (prevResult && result < prevResult && result === 0) {
-                runOnJS(unmountPanel)();
-            }
         },
         [],
     );
 
-    const panelBody = (
-        <Animated.View
-            style={[
-                style.wrapper,
-                orientation === "horizontal" ? {
-                    height: vh(100) - safeAreaInsets.top,
-                    bottom: 0,
-                } : {
-                    top: positionMethod === "top" ? (NativeUtils.getWindowDimensions().height + safeAreaInsets.top) - height - safeAreaInsets.bottom : undefined,
-                    bottom: positionMethod === "bottom" ? 0 : undefined,
-                    height: height,
-                },
-                {
-                    backgroundColor: colors.backdrop,
-                },
-                panelAnimated,
-            ]}>
-            {renderBody(loading)}
-        </Animated.View>
-    );
+    const windowHeight = Dimensions.get("window").height;
+    const verticalPositionStyle =
+        positionMethod === "top"
+            ? {
+                top: Math.max(
+                    safeAreaInsets.top,
+                    windowHeight - height - safeAreaInsets.bottom,
+                ),
+                height,
+            }
+            : {
+                bottom: 0,
+                height,
+            };
 
     return (
-        <>
-            <Pressable
-                style={style.maskWrapper}
-                onPress={() => {
-                    snapPoint.value = withTiming(0, timingConfig);
-                }}>
+        <Modal
+            visible
+            transparent
+            animationType="none"
+            statusBarTranslucent
+            presentationStyle="overFullScreen"
+            onRequestClose={closePanel}>
+            <View style={style.rootHost} collapsable={false}>
+                <TouchableWithoutFeedback
+                    accessibilityRole="button"
+                    accessibilityLabel="关闭面板"
+                    onPress={closePanel}>
+                    <Animated.View
+                        collapsable={false}
+                        style={[style.mask, maskAnimated]}
+                    />
+                </TouchableWithoutFeedback>
+
                 <Animated.View
-                    style={[style.maskWrapper, style.mask, maskAnimated]}
-                />
-            </Pressable>
-            {keyboardAvoidBehavior === "none" ? (
-                panelBody
-            ) : (
-                <KeyboardAvoidingView
-                    style={style.kbContainer}
-                    behavior={keyboardAvoidBehavior || "position"}>
-                    {panelBody}
-                </KeyboardAvoidingView>
-            )}
-        </>
+                    pointerEvents="auto"
+                    collapsable={false}
+                    style={[
+                        style.wrapper,
+                        orientation === "horizontal"
+                            ? {
+                                height: vh(100) - safeAreaInsets.top,
+                                ...style.bottomPosition,
+                            }
+                            : verticalPositionStyle,
+                        {
+                            backgroundColor: colors.backdrop,
+                        },
+                        panelAnimated,
+                    ]}>
+                    <View style={style.sheetBody} pointerEvents="auto">
+                        {renderBody(loading)}
+                    </View>
+                </Animated.View>
+            </View>
+        </Modal>
     );
 }
 
 const style = StyleSheet.create({
-    maskWrapper: {
+    // Match dialog backContainer: full-window host in the app overlay tree.
+    rootHost: {
         position: "absolute",
-        width: "100%",
-        height: "100%",
-        top: 0,
         left: 0,
+        top: 0,
         right: 0,
         bottom: 0,
-        zIndex: 15000,
+        width: "100%",
+        height: "100%",
     },
     mask: {
+        position: "absolute",
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: "100%",
+        height: "100%",
         backgroundColor: "#000",
-        opacity: 0.5,
+        zIndex: 0,
     },
     wrapper: {
         position: "absolute",
@@ -222,9 +325,19 @@ const style = StyleSheet.create({
         right: 0,
         borderTopLeftRadius: rpx(28),
         borderTopRightRadius: rpx(28),
-        zIndex: 15010,
+        flexDirection: "column",
+        overflow: "hidden",
+        zIndex: 1,
+        elevation: 16,
     },
-    kbContainer: {
-        zIndex: 15010,
+    sheetBody: {
+        flex: 1,
+        width: "100%",
+    },
+    bottomPosition: {
+        bottom: 0,
+    },
+    bottomPositionDynamic: {
+        bottom: 0,
     },
 });

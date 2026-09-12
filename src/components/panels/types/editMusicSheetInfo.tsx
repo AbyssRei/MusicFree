@@ -15,7 +15,8 @@ import useColors from "@/hooks/useColors.ts";
 import { addFileScheme, addRandomHash } from "@/utils/fileUtils.ts";
 import rpx from "@/utils/rpx";
 import Toast from "@/utils/toast.ts";
-import { readAsStringAsync } from "expo-file-system";
+import { devLog } from "@/utils/log";
+import { readAsStringAsync } from "expo-file-system/legacy";
 import React, { useState } from "react";
 import { StyleSheet, TouchableOpacity, View } from "react-native";
 import { exists, unlink, writeFile } from "react-native-fs";
@@ -42,10 +43,10 @@ export default function EditMusicSheetInfo(props: IEditSheetDetailProps) {
             if (!uri) {
                 return;
             }
-            console.log(uri);
+            devLog("info", "📁[编辑歌单信息] 选择封面图片", { uri });
             setCoverImg(uri);
         } catch (e) {
-            console.log(e);
+            devLog("warn", "📁[编辑歌单信息] 选择图片失败", e);
         }
     };
 
@@ -81,7 +82,7 @@ export default function EditMusicSheetInfo(props: IEditSheetDetailProps) {
                 });
                 await writeFile(newCoverImg, rawImage, "base64");
             } catch (e) {
-                console.log(e);
+                devLog("warn", "📁[编辑歌单信息] 写入图片失败", e);
             }
         }
         let _title = title;
@@ -126,13 +127,13 @@ export default function EditMusicSheetInfo(props: IEditSheetDetailProps) {
                         value={title}
                         hasHorizontalPadding={false}
                         onChangeText={onTitleChange}
-                        style={{
-                            height: fontSizeConst.content * 2.5,
-                            width: "50%",
-                            borderBottomWidth: 1,
-                            includeFontPadding: false,
-                            borderBottomColor: colors.text,
-                        }}
+                        style={[
+                            style.titleInput,
+                            {
+                                height: fontSizeConst.content * 2.5,
+                                borderBottomColor: colors.text,
+                            },
+                        ]}
                     />
                 </View>
                 <TouchableOpacity
@@ -173,5 +174,10 @@ const style = StyleSheet.create({
         marginTop: rpx(24),
         justifyContent: "center",
         alignItems: "center",
+    },
+    titleInput: {
+        width: "50%",
+        borderBottomWidth: 1,
+        includeFontPadding: false,
     },
 });

@@ -1,11 +1,12 @@
 import React, { useState } from "react";
-import rpx from "@/utils/rpx";
+import rpx, { fontRpx } from "@/utils/rpx";
 import { StyleSheet, View } from "react-native";
 import ThemeText from "@/components/base/themeText";
 import { hideDialog } from "../useDialog";
 import Dialog from "./base";
 import Input from "@/components/base/input";
 import useColors from "@/hooks/useColors";
+import useHasCustomBackground from "@/hooks/useHasCustomBackground";
 import { useI18N } from "@/core/i18n";
 
 interface ISubscribeItem {
@@ -31,31 +32,41 @@ export default function SubscribePluginDialog(
     const [url, setUrl] = useState(subscribeItem?.url ?? "");
 
     const colors = useColors();
+    const hasCustomBackground = useHasCustomBackground();
     const { t } = useI18N();
 
-
-    const inputStyles = {
-        backgroundColor: colors.card,
-        borderColor: colors.divider,
-        color: colors.text,
-    };
-
-    const containerStyles = {
-        backgroundColor: colors.backdrop,
+    // Do NOT paint Content with colors.backdrop — on custom wallpaper
+    // backdrop is rgba(0,0,0,0.62) and reads as a big black box inside the
+    // already semi-transparent surfaceElevated dialog shell.
+    const inputShellStyle = {
+        borderColor: hasCustomBackground ? "transparent" : colors.divider,
+        borderWidth: hasCustomBackground ? 0 : rpx(2),
+        backgroundColor: hasCustomBackground
+            ? colors.surface
+            : colors.card,
+        elevation: hasCustomBackground ? 0 : 2,
+        shadowOpacity: hasCustomBackground ? 0 : 0.1,
+        shadowColor: hasCustomBackground ? "transparent" : "#000",
     };
 
     return (
         <Dialog onDismiss={hideDialog}>
             <Dialog.Title>{t("dialog.subscriptionPluginDialog.title")}</Dialog.Title>
-            <Dialog.Content style={[style.dialogContent, containerStyles]}>
+            <Dialog.Content style={style.dialogContent}>
                 <View style={style.inputSection}>
                     <View style={style.labelContainer}>
                         <ThemeText style={style.label}>{t("common.name")}</ThemeText>
                     </View>
-                    <View style={[style.inputContainer, { borderColor: colors.divider, backgroundColor: colors.card }]}>
+                    <View style={[style.inputContainer, inputShellStyle]}>
                         <Input
                             hasHorizontalPadding={false}
-                            style={[style.textInput, inputStyles]}
+                            style={[
+                                style.textInput,
+                                {
+                                    backgroundColor: "transparent",
+                                    color: colors.text,
+                                },
+                            ]}
                             value={name}
                             onChangeText={text => {
                                 setName(text);
@@ -70,10 +81,16 @@ export default function SubscribePluginDialog(
                     <View style={style.labelContainer}>
                         <ThemeText style={style.label}>URL</ThemeText>
                     </View>
-                    <View style={[style.inputContainer, { borderColor: colors.divider, backgroundColor: colors.card }]}>
+                    <View style={[style.inputContainer, inputShellStyle]}>
                         <Input
                             hasHorizontalPadding={false}
-                            style={[style.textInput, inputStyles]}
+                            style={[
+                                style.textInput,
+                                {
+                                    backgroundColor: "transparent",
+                                    color: colors.text,
+                                },
+                            ]}
                             value={url}
                             onChangeText={text => {
                                 setUrl(text);
@@ -125,12 +142,11 @@ const style = StyleSheet.create({
         marginBottom: rpx(8),
     },
     label: {
-        fontSize: rpx(28),
+        fontSize: fontRpx(28),
         fontWeight: "500",
         opacity: 0.9,
     },
     inputContainer: {
-        borderWidth: rpx(2),
         borderRadius: rpx(8),
         paddingHorizontal: rpx(16),
         paddingVertical: rpx(4),
@@ -140,12 +156,10 @@ const style = StyleSheet.create({
             width: 0,
             height: rpx(2),
         },
-        shadowOpacity: 0.1,
         shadowRadius: rpx(4),
-        elevation: 2,
     },
     textInput: {
-        fontSize: rpx(28),
+        fontSize: fontRpx(28),
         includeFontPadding: false,
         paddingVertical: rpx(12),
         borderWidth: 0,

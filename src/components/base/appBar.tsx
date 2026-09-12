@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import rpx from "@/utils/rpx";
 import useColors from "@/hooks/useColors";
+import useHasCustomBackground from "@/hooks/useHasCustomBackground";
 import StatusBar from "./statusBar";
 import color from "color";
 import IconButton from "./iconButton";
@@ -49,7 +50,7 @@ interface IAppBarProps {
 }
 
 const ANIMATION_EASING: Animated.EasingFunction = Easing.out(Easing.exp);
-const ANIMATION_DURATION = 500;
+const ANIMATION_DURATION = 220;
 
 const timingConfig = {
     duration: ANIMATION_DURATION,
@@ -72,6 +73,7 @@ export default function AppBar(props: IAppBarProps) {
     } = props;
 
     const colors = useColors();
+    const hasCustomBackground = useHasCustomBackground();
     const navigation = useNavigation();
 
     const bgColor = color(colors.appBar ?? colors.primary).toString();
@@ -88,7 +90,7 @@ export default function AppBar(props: IAppBarProps) {
         } else {
             scaleRate.value = withTiming(0, timingConfig);
         }
-    }, [showMenu]);
+    }, [showMenu, scaleRate]);
 
     const transformStyle = useAnimatedStyle(() => {
         return {
@@ -103,7 +105,10 @@ export default function AppBar(props: IAppBarProps) {
                 style={[
                     styles.container,
                     containerStyle,
-                    { backgroundColor: bgColor },
+                    {
+                        backgroundColor: bgColor,
+                        borderBottomColor: colors.border,
+                    },
                 ]}>
                 <IconButton
                     name="arrow-left"
@@ -121,7 +126,7 @@ export default function AppBar(props: IAppBarProps) {
                     {typeof children === "string" ? (
                         <ThemeText
                             fontSize="title"
-                            fontWeight="bold"
+                            fontWeight="semibold"
                             numberOfLines={1}
                             color={
                                 titleTextOpacity !== 1
@@ -176,7 +181,7 @@ export default function AppBar(props: IAppBarProps) {
                         pointerEvents={showMenu ? "auto" : "none"}
                         style={[
                             {
-                                borderBottomColor: colors.background,
+                                borderBottomColor: colors.surfaceElevated,
                                 left:
                                     (menuIconLayout?.x ?? 0) +
                                     (menuIconLayout?.width ?? 0) / 2 -
@@ -196,7 +201,13 @@ export default function AppBar(props: IAppBarProps) {
                         pointerEvents={showMenu ? "auto" : "none"}
                         style={[
                             {
-                                backgroundColor: colors.background,
+                                backgroundColor: colors.surfaceElevated,
+                                borderColor: hasCustomBackground
+                                    ? "transparent"
+                                    : colors.border,
+                                borderWidth: hasCustomBackground
+                                    ? 0
+                                    : StyleSheet.hairlineWidth,
                                 right: rpx(24),
                                 top:
                                     (menuIconLayout?.y ?? 0) +
@@ -205,7 +216,11 @@ export default function AppBar(props: IAppBarProps) {
                                     (menuWithStatusBar
                                         ? OriginalStatusBar.currentHeight ?? 0
                                         : 0),
-                                shadowColor: colors.shadow,
+                                shadowColor: hasCustomBackground
+                                    ? "transparent"
+                                    : colors.shadow,
+                                shadowOpacity: hasCustomBackground ? 0 : 0.23,
+                                elevation: hasCustomBackground ? 0 : 4,
                             },
                             transformStyle,
                             styles.menu,
@@ -239,10 +254,11 @@ const styles = StyleSheet.create({
     container: {
         width: "100%",
         zIndex: 10000,
-        height: rpx(88),
+        height: rpx(96),
         flexDirection: "row",
         alignItems: "center",
         paddingHorizontal: rpx(24),
+        borderBottomWidth: StyleSheet.hairlineWidth,
     },
     content: {
         flexDirection: "row",
@@ -272,7 +288,7 @@ const styles = StyleSheet.create({
     menu: {
         width: rpx(340),
         maxHeight: rpx(600),
-        borderRadius: rpx(8),
+        borderRadius: rpx(18),
         zIndex: 10011,
         position: "absolute",
         opacity: 0,
@@ -280,8 +296,6 @@ const styles = StyleSheet.create({
             width: 0,
             height: 2,
         },
-        shadowOpacity: 0.23,
         shadowRadius: 2.62,
-        elevation: 4,
     },
 });

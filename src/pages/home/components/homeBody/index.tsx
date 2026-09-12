@@ -1,16 +1,27 @@
 import React from "react";
-import globalStyle from "@/constants/globalStyle";
 import Operations from "./operations";
 import Sheets from "./sheets";
-import { ScrollView } from "react-native-gesture-handler";
+import HomeHero from "../HomeHero";
+import { useAppConfig } from "@/core/appConfig";
+import HomeOverview from "./homeOverview";
 
 export default function HomeBody() {
+    const homeLayout = useAppConfig("theme.homeLayout") ?? "classic";
+    const hideHomeHeroCard = useAppConfig("theme.hideHomeHeroCard") ?? false;
+    const hideHomeOperations = useAppConfig("theme.hideHomeOperations") ?? false;
+
+    if (homeLayout === "overview") {
+        return <HomeOverview />;
+    }
+
     return (
-        <ScrollView
-            style={globalStyle.fwflex1}
-            showsVerticalScrollIndicator={false}>
-            <Operations />
-            <Sheets />
-        </ScrollView>
+        <Sheets
+            header={
+                <>
+                    {!hideHomeHeroCard && <HomeHero />}
+                    {!hideHomeOperations && <Operations />}
+                </>
+            }
+        />
     );
 }

@@ -14,6 +14,9 @@ import { useParams } from "@/core/router";
 import Image from "@/components/base/image";
 import { ImgAsset } from "@/constants/assetsConst";
 import { useI18N } from "@/core/i18n";
+import useColors from "@/hooks/useColors";
+import useCardStyle from "@/hooks/useCardStyle";
+import Color from "color";
 
 const headerHeight = rpx(350);
 
@@ -31,6 +34,13 @@ export default function Header(props: IHeaderProps) {
     const scrollToTopState = useAtomValue(scrollToTopAtom);
 
     const { t } = useI18N();
+    const colors = useColors();
+    const cardStyle = useCardStyle({
+        borderWidth: 0,
+        elevation: 3,
+    });
+    const accentBackground = Color(colors.primary).alpha(0.1).toString();
+    const detailBackground = colors.surfaceElevated ?? colors.card;
 
     const heightStyle = useAnimatedStyle(() => {
         return {
@@ -57,50 +67,89 @@ export default function Header(props: IHeaderProps) {
             heightValue.value = withTiming(0);
             opacityValue.value = withTiming(0);
         }
-    }, [scrollToTopState, neverFold]);
+    }, [scrollToTopState, neverFold, heightValue, opacityValue]);
 
     return (
         <Animated.View style={[styles.wrapper, heightStyle]}>
-            <View style={styles.headerWrapper}>
-                <Image
-                    emptySrc={ImgAsset.albumDefault}
-                    uri={avatar}
-                    style={styles.artist}
-                />
-                <View style={styles.info}>
-                    <View style={styles.title}>
+            <View
+                style={[
+                    styles.infoCard,
+                    {
+                        backgroundColor: colors.surface,
+                    },
+                    cardStyle,
+                ]}>
+                <View style={styles.headerWrapper}>
+                    <View
+                        style={[
+                            styles.artistShell,
+                            {
+                                backgroundColor: detailBackground,
+                            },
+                        ]}>
+                        <Image
+                            emptySrc={ImgAsset.albumDefault}
+                            uri={avatar}
+                            style={styles.artist}
+                        />
+                    </View>
+                    <View style={styles.info}>
+                        <View style={styles.metaRow}>
+                            <View
+                                style={[
+                                    styles.typeBadge,
+                                    {
+                                        backgroundColor: accentBackground,
+                                    },
+                                ]}>
+                                <ThemeText
+                                    color={colors.primary}
+                                    fontSize="caption"
+                                    fontWeight="bold">
+                                    {t("common.artist")}
+                                </ThemeText>
+                            </View>
+                            {artistItem.platform ? (
+                                <Tag tagName={artistItem.platform} />
+                            ) : null}
+                        </View>
                         <ThemeText
                             fontSize="title"
+                            fontWeight="bold"
                             style={styles.titleText}
-                            numberOfLines={1}
+                            numberOfLines={2}
                             ellipsizeMode="tail">
                             {artistItem?.name ?? ""}
                         </ThemeText>
-                        {artistItem.platform ? (
-                            <Tag tagName={artistItem.platform} />
+
+                        {artistItem.fans ? (
+                            <ThemeText
+                                fontSize="subTitle"
+                                fontColor="textSecondary">
+                                {t("artistDetail.fansCount", {
+                                    count: artistItem.fans,
+                                })}
+                            </ThemeText>
                         ) : null}
                     </View>
+                </View>
 
-                    {artistItem.fans ? (
-                        <ThemeText
-                            fontSize="subTitle"
-                            fontColor="textSecondary">
-                            {t("artistDetail.fansCount", {
-                                count: artistItem.fans,
-                            })}
-                        </ThemeText>
-                    ) : null}
+                <View
+                    style={[
+                        styles.descriptionCard,
+                        {
+                            backgroundColor: detailBackground,
+                        },
+                    ]}>
+                    <ThemeText
+                        numberOfLines={2}
+                        ellipsizeMode="tail"
+                        fontColor="textSecondary"
+                        fontSize="description">
+                        {artistItem?.description ?? ""}
+                    </ThemeText>
                 </View>
             </View>
-
-            <ThemeText
-                style={styles.description}
-                numberOfLines={2}
-                ellipsizeMode="tail"
-                fontColor="textSecondary"
-                fontSize="description">
-                {artistItem?.description ?? ""}
-            </ThemeText>
         </Animated.View>
     );
 }
@@ -109,38 +158,60 @@ const styles = StyleSheet.create({
     wrapper: {
         width: rpx(750),
         height: headerHeight,
-        backgroundColor: "rgba(28, 28, 28, 0.1)",
         zIndex: 1,
+        paddingHorizontal: rpx(12),
+        paddingTop: rpx(12),
+    },
+    infoCard: {
+        borderRadius: rpx(22),
+        padding: rpx(22),
+        shadowOffset: {
+            width: 0,
+            height: rpx(2),
+        },
+        shadowRadius: rpx(4),
     },
     artist: {
-        width: rpx(144),
-        height: rpx(144),
-        borderRadius: rpx(16),
+        width: "100%",
+        height: "100%",
+        borderRadius: rpx(24),
+    },
+    artistShell: {
+        width: rpx(176),
+        height: rpx(176),
+        borderRadius: rpx(28),
+        padding: rpx(14),
+        marginRight: rpx(22),
     },
     headerWrapper: {
-        width: rpx(750),
-        paddingTop: rpx(24),
-        paddingHorizontal: rpx(24),
-        height: rpx(240),
         flexDirection: "row",
-        alignItems: "center",
+        alignItems: "flex-start",
     },
     info: {
-        marginLeft: rpx(24),
-        justifyContent: "space-around",
-        height: rpx(144),
+        flex: 1,
+        minHeight: rpx(176),
+        justifyContent: "space-between",
     },
-    title: {
+    metaRow: {
         flexDirection: "row",
+        alignItems: "center",
+        flexWrap: "wrap",
+        marginBottom: rpx(14),
+    },
+    typeBadge: {
+        minHeight: rpx(36),
+        paddingHorizontal: rpx(14),
+        borderRadius: rpx(18),
+        justifyContent: "center",
         alignItems: "center",
     },
     titleText: {
-        marginRight: rpx(18),
-        maxWidth: rpx(400),
+        marginBottom: rpx(14),
     },
-    description: {
-        marginTop: rpx(24),
-        width: rpx(750),
-        paddingHorizontal: rpx(24),
+    descriptionCard: {
+        marginTop: rpx(20),
+        paddingHorizontal: rpx(18),
+        paddingVertical: rpx(16),
+        borderRadius: rpx(18),
     },
 });

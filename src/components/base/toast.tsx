@@ -1,10 +1,9 @@
-import { timingConfig } from "@/constants/commonConst";
 import { fontSizeConst } from "@/constants/uiConst";
 import useColors from "@/hooks/useColors";
 import rpx from "@/utils/rpx";
 import { GlobalState } from "@/utils/stateMapper";
-import { nanoid } from "nanoid";
-import React, { useCallback, useEffect } from "react";
+import { nanoid } from "@/utils/nanoid";
+import React, { useCallback, useEffect, useRef } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import {
     Directions,
@@ -13,6 +12,7 @@ import {
 } from "react-native-gesture-handler";
 import Animated, {
     cancelAnimation,
+    Easing,
     runOnJS,
     useAnimatedStyle,
     useSharedValue,
@@ -55,50 +55,75 @@ const typeConfig = {
     },
 } as const;
 
+/** Plain config — avoid sharing non-worklet Easing from commonConst into Reanimated. */
+const TOAST_IN = { duration: 280, easing: Easing.out(Easing.cubic) };
+const TOAST_OUT = { duration: 220, easing: Easing.in(Easing.cubic) };
+
 export function ToastBaseComponent() {
     const activeToast = activeToastStore.useValue();
     const colors = useColors();
+    // Track which toast id the current animation belongs to (avoid double-fire).
+    const animatingIdRef = useRef<string | null>(null);
 
     const toastAnim = useSharedValue(0);
 
     const setNextToast = useCallback(() => {
+        animatingIdRef.current = null;
         activeToastStore.setValue(toastQueue.shift() || null);
     }, []);
 
     useEffect(() => {
-        if (activeToast) {
-            toastAnim.value = withTiming(1, timingConfig.animationSlow, () => {
-                toastAnim.value = withDelay(
-                    activeToast.duration || 1200,
-                    withTiming(0, timingConfig.animationSlow, finished => {
-                        if (finished) {
-                            runOnJS(setNextToast)();
-                        }
-                    }),
-                );
-            });
-        }
-    }, [activeToast]);
-
-    function removeCurrentToast() {
-        if (toastAnim.value === 1) {
+        if (!activeToast) {
             cancelAnimation(toastAnim);
-            toastAnim.value = withTiming(
-                0,
-                timingConfig.animationSlow,
-                finished => {
-                    if (finished) {
+            toastAnim.value = 0;
+            animatingIdRef.current = null;
+            return;
+        }
+
+        // Same toast already animating — do not restart (prevents re-entrancy).
+        if (animatingIdRef.current === activeToast.id) {
+            return;
+        }
+        animatingIdRef.current = activeToast.id;
+
+        const holdMs = Math.max(400, activeToast.duration ?? 1200);
+
+        cancelAnimation(toastAnim);
+        // Reset without animation so the next withTiming always has a clean start.
+        toastAnim.value = 0;
+        toastAnim.value = withTiming(1, TOAST_IN, finishedIn => {
+            "worklet";
+            if (!finishedIn) {
+                return;
+            }
+            toastAnim.value = withDelay(
+                holdMs,
+                withTiming(0, TOAST_OUT, finishedOut => {
+                    "worklet";
+                    if (finishedOut) {
                         runOnJS(setNextToast)();
                     }
-                },
+                }),
             );
-        }
-    }
+        });
+        // Depend only on toast id — never on toastAnim (SharedValue identity churn).
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- toastAnim is stable SV
+    }, [activeToast?.id, setNextToast]);
+
+    const dismissCurrentToast = useCallback(() => {
+        cancelAnimation(toastAnim);
+        toastAnim.value = withTiming(0, TOAST_OUT, finished => {
+            "worklet";
+            if (finished) {
+                runOnJS(setNextToast)();
+            }
+        });
+    }, [setNextToast, toastAnim]);
 
     const flingGesture = Gesture.Fling()
         .direction(Directions.UP)
         .onEnd(() => {
-            removeCurrentToast();
+            dismissCurrentToast();
         })
         .runOnJS(true);
 
@@ -113,15 +138,23 @@ export function ToastBaseComponent() {
         };
     });
 
-    return activeToast ? (
+    if (!activeToast) {
+        return null;
+    }
+
+    return (
         <GestureDetector gesture={flingGesture}>
-            <View style={styles.container}>
+            <View style={styles.container} pointerEvents="box-none">
                 <Animated.View
                     style={[
                         styles.contentContainer,
                         {
                             backgroundColor: colors.notification,
-                            shadowColor: colors.shadow,
+                            // No elevation/shadow: avoids dark rings under wallpaper
+                            // and skips extra native shadow updates during anim.
+                            shadowColor: "transparent",
+                            shadowOpacity: 0,
+                            elevation: 0,
                         },
                         toastAnimStyle,
                     ]}>
@@ -150,7 +183,7 @@ export function ToastBaseComponent() {
                 </Animated.View>
             </View>
         </GestureDetector>
-    ) : null;
+    );
 }
 
 const styles = StyleSheet.create({
@@ -166,18 +199,14 @@ const styles = StyleSheet.create({
         width: rpx(688),
         height: "100%",
         borderRadius: rpx(12),
-        backgroundColor: "blue",
         flexDirection: "row",
         alignItems: "center",
         paddingHorizontal: rpx(24),
         shadowOffset: {
             width: 0,
-            height: 2,
+            height: 0,
         },
-        shadowOpacity: 0.2,
-        shadowRadius: 1.41,
-
-        elevation: 2,
+        shadowRadius: 0,
     },
     text: {
         fontSize: fontSizeConst.content,
