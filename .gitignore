@@ -27,6 +27,7 @@ DerivedData
 build/
 .idea
 .gradle
+android/.kotlin/
 local.properties
 *.iml
 *.hprof
@@ -78,11 +79,35 @@ keystore.properties
 .VSCodeCounter/
 
 .vscode/
+.vs/
 tmp/
-scripts/
 
 *.log
 # Expo
 .expo
 dist/
 web-build/
+
+# React Native auto-generated build assets
+android/app/src/main/assets/index.android.bundle
+android/app/src/main/res/drawable-*/
+# iOS build assets
+ios/*/Images.xcassets/
+
+# MusicFree plugins repository (contains plugin files)
+musicfree-plugins/
+
+# Claude project file
+CLAUDE.md
+AGENTS.md
+.claude/
+
+# Release documentation
+release/README.md
+
+# Documentation directory
+docs/
+.serena/
+
+.ace-tool/
+.playwright-mcp/

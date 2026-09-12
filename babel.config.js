@@ -1,21 +1,27 @@
-module.exports = {
-    presets: ['babel-preset-expo'],
-    plugins: [
+module.exports = api => {
+    const isProduction = api.env("production");
+    const plugins = [
         [
-            'module-resolver',
+            "module-resolver",
             {
-                root: ['./'],
+                root: ["./"],
                 alias: {
-                    '^@/(.+)': './src/\\1',
-                    'webdav': "webdav/dist/react-native"
+                    "^@/(.+)": "./src/\\1",
+                    webdav: "webdav/dist/react-native",
                 },
             },
         ],
-        'react-native-reanimated/plugin',
-    ],
-    env: {
-        production: {
-            plugins: ['transform-remove-console'],
-        },
-    },
+    ];
+
+    if (isProduction) {
+        plugins.push("transform-remove-console");
+    }
+
+    // babel-preset-expo already injects worklets/reanimated plugins.
+    // Only keep custom plugins here to avoid duplicate-plugin errors in Jest.
+
+    return {
+        presets: [["babel-preset-expo", { unstable_transformImportMeta: true }]],
+        plugins,
+    };
 };
